@@ -14,9 +14,9 @@ block is done. Don't move on until it's true.
 | 2 | The worker loop, step plugins, REST API | done |
 | 3 | Retries, backoff, the lease reaper | done |
 | 4 | Durable timers (parallel already works) | next |
-| 5 | Saga compensation | |
-| 6 | Entity graph, outbox, triggers | |
-| 7 | Demo scenarios, fake node services, SSE | |
+| 5 | Saga compensation + fake cluster | done |
+| 6 | Entity graph, outbox, triggers | next |
+| 7 | SSE and the DAG UI | |
 
 ---
 
@@ -354,4 +354,95 @@ SIGKILL a worker mid-step and the run still finishes. This is the demo â€” 
 - `wait` is spec-valid but has no plugin â€” it becomes a durable timer in Block 4.
 - `on_error: compensate` is validated and `compensation_order` is tested, but nothing
   executes compensating steps yet. That is Block 5.
+
+
+---
+
+## Block 5 — Saga compensation (and the fake cluster)
+
+Taken before Block 4 deliberately: rollback is the differentiator and the second
+half of the headline demo, while durable timers are a nice-to-have that could be cut.
+
+### What was added
+
+- **`fake_nodes/server.py`** — a five-node cluster, standard library only, so rollback
+  is observable against real state rather than only in the event log.
+- **`rolling_cluster_upgrade`** workflow: `preflight → drain → upgrade → verify →
+  return_to_service`, with compensating actions on `drain` and `undrain`.
+- **`service.start_compensation` / `enqueue_next_compensation`**.
+- **`worker._run_compensation`** — executes a step's `compensate` block.
+- `COMPENSATION_FAILED` event type, plus `on_error: continue` semantics.
+
+### Why it is shaped this way
+
+**Compensation is strictly sequential.** Forward steps fan out wherever the DAG allows;
+rollback must not. `enqueue_next_compensation` queues exactly one step, and each
+completed compensation triggers the next. Undoing a drain before undoing the upgrade
+that depended on it leaves a node in a state nobody designed for.
+
+**Reverse order of *completion*, not of the spec.** With parallel branches those differ,
+and only one is safe. `completion_order` is accumulated during replay for this.
+
+**No `STEP_SCHEDULED` event for compensation tasks.** That event sets a step's status to
+`SCHEDULED` during replay — which would clobber the `SUCCEEDED` status of the very step
+being unwound, and `SUCCEEDED` is what marks it as needing rollback. The task row is
+enough. This was caught by reasoning about replay, not by a test, and it is the kind of
+bug that only shows up as "rollback silently stopped after one step".
+
+**Rollback can itself fail.** `COMPENSATION_FAILED` marks the step, removes it from the
+queue so it is not retried forever, and sets `needs_manual_intervention`. The run ends
+`FAILED` with the system partially unwound — the honest outcome rather than a hidden
+one, and the log records exactly how far it got. Expect a judge to ask this.
+
+**`on_error: continue`** records the failure but does not condemn the run. Dependents
+are blocked anyway, since readiness requires `SUCCEEDED`, so the branch just stops.
+
+**`fail-after-upgrade`, not `fail-next`.** The first version armed the *next* health
+check — but `preflight` runs one before the upgrade and ate it, so the interesting path
+never ran. Arming a failure that fires only once the version has changed is both
+deterministic and more realistic: the upgrade is what broke the node.
+
+### How to see it
+
+```bash
+.venv\Scripts\python.exe scripts/walkthrough_04_rollback.py
+```
+
+### Verified
+
+Clean upgrade of node-1: `SUCCEEDED`, node on 7.1, back in service.
+
+Bad upgrade of node-3:
+
+```
+[13] STEP_FAILED            verify
+[14] COMPENSATION_STARTED   verify
+[15] STEP_COMPENSATED       upgrade    <- undone first
+[16] STEP_COMPENSATED       drain      <- undone second
+[17] RUN_FAILED
+```
+
+Completed `preflight → drain → upgrade`; undone `upgrade → drain`. `preflight` is absent
+because it declares no compensating action. Final state: node-3 back on **7.0,
+undrained, healthy** — the cluster is consistent, not half-upgraded.
+
+80 unit tests pass with no database.
+
+### Gotcha worth remembering
+
+Worker containers do not hot-reload. The source is volume-mounted and the Django dev
+server restarts itself, but `manage.py run_worker` is a plain Python process — so after
+touching engine code:
+
+```bash
+docker compose restart worker reaper
+```
+
+This cost a confusing debugging cycle where compensation appeared not to fire at all.
+
+### Known gaps
+
+- `wait` is spec-valid but has no plugin — durable timers are Block 4, still unbuilt.
+- Runs are still started by hand, one POST per node. Block 6 makes graph changes
+  trigger them.
 

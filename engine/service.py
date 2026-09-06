@@ -35,7 +35,12 @@ from engine.models import (
     WorkflowDef,
 )
 from engine import retry
-from engine.replay import next_run_state, ready_steps, replay
+from engine.replay import (
+    compensation_order,
+    next_run_state,
+    ready_steps,
+    replay,
+)
 from engine.spec import validate_spec
 
 log = logging.getLogger("cascade.service")
@@ -302,6 +307,61 @@ def schedule_retry(run, step, task, error):
         run.id, task.step_id, task.attempt, next_attempt, delay,
     )
     return delay
+
+
+# ---------------------------------------------------------------------------
+# Compensation (sagas)
+# ---------------------------------------------------------------------------
+
+
+def start_compensation(run, spec, context, failed_step, error):
+    """Begin unwinding a run whose step failed with ``on_error: compensate``.
+
+    Returns False if there is nothing to unwind - every completed step either
+    declares no compensating action or has already been rolled back - in which
+    case the run just fails normally.
+    """
+    pending = compensation_order(spec, context)
+    if not pending:
+        return False
+
+    append_event(
+        run,
+        EventType.COMPENSATION_STARTED,
+        failed_step,
+        {"error": error, "failed_step": failed_step, "will_compensate": pending},
+    )
+
+    log.warning(
+        "compensating %s after %s failed - unwinding %s",
+        run.id, failed_step, " then ".join(pending),
+    )
+    return True
+
+
+def enqueue_next_compensation(run, spec, context):
+    """Queue exactly ONE compensating step: the next one to unwind.
+
+    Strictly sequential, unlike forward execution. Forward steps run in
+    parallel wherever the DAG allows, but rollback must not - undoing a drain
+    before undoing the upgrade that depended on it puts the system in a state
+    neither the workflow nor the operator expects.
+
+    Each completed compensation triggers the next, so the chain walks backwards
+    one step at a time.
+    """
+    pending = compensation_order(spec, context)
+    if not pending:
+        return None
+
+    step_id = pending[0]
+
+    # Deliberately no STEP_SCHEDULED event here. That event sets a step's status
+    # to SCHEDULED during replay, which would clobber the SUCCEEDED status of the
+    # very step we are unwinding - and SUCCEEDED is what marks it as needing
+    # rollback in the first place. The task row is enough; COMPENSATION_STARTED
+    # already recorded the full plan.
+    return enqueue_step(run, step_id, kind=TaskKind.COMPENSATE)
 
 
 # ---------------------------------------------------------------------------

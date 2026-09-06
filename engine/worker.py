@@ -18,16 +18,18 @@ from django.db import transaction
 from engine import retry
 from engine.expressions import ExpressionError, render
 from engine.heartbeat import LeaseHeartbeat
-from engine.models import EventType
+from engine.models import EventType, TaskKind
 from engine.service import (
     append_event,
     claim_task,
     close_run_if_finished,
+    enqueue_next_compensation,
     enqueue_ready_steps,
     finish_task,
     finish_task_if_owned,
     load_context,
     schedule_retry,
+    start_compensation,
     sync_run_projection,
 )
 from engine.spec import steps_by_id
@@ -60,11 +62,20 @@ def execute_task(task, worker_id):
         return
 
     context = load_context(run)
+    compensating = task.kind == TaskKind.COMPENSATE
 
     log.info(
-        "[%s] claim  %-14s run=%s attempt=%s",
-        _short(worker_id), task.step_id, _short(str(run.id)), task.attempt,
+        "[%s] %s %-14s run=%s attempt=%s",
+        _short(worker_id),
+        "UNDO  " if compensating else "claim ",
+        task.step_id,
+        _short(str(run.id)),
+        task.attempt,
     )
+
+    if compensating:
+        _run_compensation(task, run, spec, step, context, worker_id)
+        return
 
     append_event(run, EventType.STEP_STARTED, task.step_id, {"attempt": task.attempt})
 
@@ -108,6 +119,68 @@ def execute_task(task, worker_id):
     _record_terminal_failure(task, run, spec, error, result.get("details"))
 
 
+def _run_compensation(task, run, spec, step, context, worker_id):
+    """Undo one completed step by running its ``compensate`` block."""
+    comp = step.get("compensate") or {}
+
+    with LeaseHeartbeat(task, worker_id) as beat:
+        ok, result = _execute_step(
+            {"type": comp.get("type", "noop"), "config": comp.get("config", {})},
+            context,
+            task.idempotency_key,
+        )
+
+    if beat.lost or not finish_task_if_owned(task, worker_id):
+        log.warning(
+            "[%s] ABANDON %-13s compensation lease lost", _short(worker_id), task.step_id
+        )
+        return
+
+    if ok:
+        log.info("[%s] undone %-14s", _short(worker_id), task.step_id)
+        with transaction.atomic():
+            append_event(
+                run, EventType.STEP_COMPENSATED, task.step_id, {"output": result}
+            )
+            _advance(run, spec)
+        return
+
+    error = result.get("error", "")
+
+    # Rollback can be retried like anything else - a transient failure while
+    # undoing is no different from a transient failure while doing.
+    if retry.should_retry(comp, task.attempt):
+        log.warning(
+            "[%s] retry undo %-9s attempt %s/%s: %s",
+            _short(worker_id), task.step_id, task.attempt,
+            retry.max_attempts(comp), error,
+        )
+        with transaction.atomic():
+            schedule_retry(run, comp, task, error)
+            sync_run_projection(run, spec, load_context(run))
+        return
+
+    # Rollback itself has failed for good. This is the genuinely bad case: the
+    # system is now partially unwound and no automated action can fix it. Say so
+    # loudly, stop trying, and leave the log as the record of exactly how far
+    # the unwind got.
+    log.error(
+        "[%s] UNDO FAILED %-8s %s - manual intervention required",
+        _short(worker_id), task.step_id, error,
+    )
+    with transaction.atomic():
+        append_event(
+            run,
+            EventType.COMPENSATION_FAILED,
+            task.step_id,
+            {
+                "error": f"could not undo {task.step_id}: {error}",
+                "attempts": task.attempt,
+            },
+        )
+        _advance(run, spec)
+
+
 def _execute_step(step, context, idem_key):
     """Run one step. Returns (ok, result). Never raises."""
     try:
@@ -133,6 +206,8 @@ def _record_success(task, run, spec, output):
 
 
 def _record_terminal_failure(task, run, spec, error, details=None):
+    step = steps_by_id(spec).get(task.step_id, {})
+
     with transaction.atomic():
         append_event(
             run,
@@ -140,6 +215,11 @@ def _record_terminal_failure(task, run, spec, error, details=None):
             task.step_id,
             {"error": error, "details": details or {}, "attempt": task.attempt},
         )
+
+        if step.get("on_error") == "compensate":
+            context = load_context(run)
+            start_compensation(run, spec, context, task.step_id, error)
+
         _advance(run, spec)
 
 
@@ -152,9 +232,18 @@ def _fail_terminally(task, run, spec, error):
 
 
 def _advance(run, spec):
-    """Re-derive state from the log, enqueue what is now ready, close if done."""
+    """Re-derive state from the log, queue whatever is next, close if done.
+
+    The branch here is the whole of saga control flow: while compensating we
+    walk backwards one step at a time; otherwise we fan out forwards as widely
+    as the DAG allows.
+    """
     context = load_context(run)
-    enqueue_ready_steps(run, spec, context)
+
+    if context["compensating"]:
+        enqueue_next_compensation(run, spec, context)
+    else:
+        enqueue_ready_steps(run, spec, context)
 
     if close_run_if_finished(run, spec, context):
         context = load_context(run)

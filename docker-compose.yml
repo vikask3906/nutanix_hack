@@ -55,6 +55,18 @@ services:
     volumes:
       - .:/app
 
+  # A fake five-node cluster the rolling-upgrade workflow acts on, so rollback
+  # is observable against real state rather than only in the event log.
+  nodes:
+    build: .
+    command: python fake_nodes/server.py
+    environment:
+      PORT: "9000"
+    ports:
+      - "9000:9000"
+    volumes:
+      - .:/app
+
   # Returns tasks whose holder stopped heartbeating. Its own process so you can
   # watch it act during the crash demo.
   reaper:

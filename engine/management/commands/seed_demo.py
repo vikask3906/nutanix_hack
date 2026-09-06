@@ -131,6 +131,77 @@ FLAKY = {
 }
 
 
+ROLLING_UPGRADE = {
+    "name": "rolling_cluster_upgrade",
+    "steps": [
+        {
+            "id": "preflight",
+            "type": "http",
+            "config": {
+                "method": "GET",
+                "url": "http://nodes:9000/nodes/{{ input.node }}/health",
+            },
+            "retry": {"max": 3, "backoff": "exponential", "base_ms": 300},
+        },
+        {
+            # Stop scheduling work on the node. Undone by 'undrain'.
+            "id": "drain",
+            "type": "http",
+            "needs": ["preflight"],
+            "config": {
+                "method": "POST",
+                "url": "http://nodes:9000/nodes/{{ input.node }}/drain",
+            },
+            "compensate": {
+                "type": "http",
+                "config": {
+                    "method": "POST",
+                    "url": "http://nodes:9000/nodes/{{ input.node }}/undrain",
+                },
+            },
+        },
+        {
+            # Bump the version. Undone by 'rollback', which restores it.
+            "id": "upgrade",
+            "type": "http",
+            "needs": ["drain"],
+            "config": {
+                "method": "POST",
+                "url": "http://nodes:9000/nodes/{{ input.node }}/upgrade",
+            },
+            "compensate": {
+                "type": "http",
+                "config": {
+                    "method": "POST",
+                    "url": "http://nodes:9000/nodes/{{ input.node }}/rollback",
+                },
+            },
+        },
+        {
+            # The gate. If the node is unhealthy after upgrading, everything
+            # above is unwound in reverse: rollback, then undrain.
+            "id": "verify",
+            "type": "http",
+            "needs": ["upgrade"],
+            "config": {
+                "method": "GET",
+                "url": "http://nodes:9000/nodes/{{ input.node }}/health",
+            },
+            "on_error": "compensate",
+        },
+        {
+            "id": "return_to_service",
+            "type": "http",
+            "needs": ["verify"],
+            "config": {
+                "method": "POST",
+                "url": "http://nodes:9000/nodes/{{ input.node }}/undrain",
+            },
+        },
+    ],
+}
+
+
 class Command(BaseCommand):
     help = "Create the demo workflow definitions."
 
@@ -138,7 +209,7 @@ class Command(BaseCommand):
         tenant = default_tenant()
         self.stdout.write(f"tenant: {tenant.slug}")
 
-        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY):
+        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY, ROLLING_UPGRADE):
             existing = WorkflowDef.objects.filter(
                 tenant=tenant, name=spec["name"]
             ).order_by("-version").first()

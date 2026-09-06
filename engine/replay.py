@@ -81,6 +81,7 @@ def new_context():
         "compensating": False,
         "completion_order": [],  # step ids in the order they SUCCEEDED
         "error": "",
+        "needs_manual_intervention": False,
         "last_seq": 0,
     }
 
@@ -94,6 +95,7 @@ def _step_slot(context, step_id):
             "error": "",
             "attempts": 0,
             "compensated": False,
+            "compensation_failed": False,
         },
     )
 
@@ -161,6 +163,17 @@ def apply_event(context, event):
         slot = _step_slot(context, step_id)
         slot["status"] = StepStatus.COMPENSATED
         slot["compensated"] = True
+
+    elif etype == "COMPENSATION_FAILED":
+        # Rollback itself failed. We cannot undo this step and we must not
+        # retry it forever, so it is marked and skipped. The run ends FAILED
+        # with the system in a partially-unwound state that a human must look
+        # at - which is the honest outcome, not a hidden one.
+        slot = _step_slot(context, step_id)
+        slot["compensation_failed"] = True
+        slot["error"] = payload.get("error", slot["error"])
+        context["needs_manual_intervention"] = True
+        context["error"] = payload.get("error", context["error"])
 
     elif etype == "RUN_SUCCEEDED":
         context["status"] = RunState.SUCCEEDED
@@ -240,7 +253,7 @@ def compensation_order(spec, context):
         if not step or not step.get("compensate"):
             continue
         slot = context["steps"].get(sid, {})
-        if slot.get("compensated"):
+        if slot.get("compensated") or slot.get("compensation_failed"):
             continue
         out.append(sid)
 
@@ -256,11 +269,18 @@ def is_complete(spec, context):
 
 
 def failed_steps(spec, context):
-    """Steps that are terminally failed."""
+    """Steps that are terminally failed AND fatal to the run.
+
+    A step declaring ``on_error: continue`` still records its failure - the log
+    must stay honest - but it does not condemn the run. Its dependents are
+    blocked anyway, since readiness requires SUCCEEDED, so the branch simply
+    stops without taking the whole workflow with it.
+    """
     return [
         s["id"]
         for s in spec.get("steps", [])
         if context["steps"].get(s["id"], {}).get("status") == StepStatus.FAILED
+        and s.get("on_error", "fail") != "continue"
     ]
 
 

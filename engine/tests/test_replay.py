@@ -259,6 +259,93 @@ class CompensationTests(unittest.TestCase):
         )
 
 
+class CompensationFailureTests(unittest.TestCase):
+    """When rollback itself fails there is no automated way out."""
+
+    def test_failed_compensation_is_not_retried_forever(self):
+        ctx = replay(
+            [
+                ev(1, "RUN_STARTED"),
+                ev(2, "STEP_SUCCEEDED", "drain", output={}),
+                ev(3, "STEP_SUCCEEDED", "upgrade", output={}),
+                ev(4, "STEP_FAILED", "verify", error="unhealthy"),
+                ev(5, "COMPENSATION_STARTED", error="unhealthy"),
+                ev(6, "COMPENSATION_FAILED", "upgrade", error="rollback endpoint down"),
+            ]
+        )
+        # 'upgrade' is out of the queue - we could not undo it and must not
+        # keep trying. 'drain' is still unwound, so we get as far as we can.
+        self.assertEqual(compensation_order(LINEAR, ctx), ["drain"])
+
+    def test_failed_compensation_flags_manual_intervention(self):
+        ctx = replay(
+            [
+                ev(1, "RUN_STARTED"),
+                ev(2, "STEP_SUCCEEDED", "drain", output={}),
+                ev(3, "STEP_FAILED", "verify", error="unhealthy"),
+                ev(4, "COMPENSATION_STARTED", error="unhealthy"),
+                ev(5, "COMPENSATION_FAILED", "drain", error="undrain endpoint down"),
+            ]
+        )
+        self.assertTrue(ctx["needs_manual_intervention"])
+        self.assertIn("undrain endpoint down", ctx["error"])
+        # Nothing left to try, so the run is terminally failed.
+        self.assertEqual(compensation_order(LINEAR, ctx), [])
+        self.assertEqual(next_run_state(LINEAR, ctx), RunState.FAILED)
+
+
+class OnErrorContinueTests(unittest.TestCase):
+    """A step marked on_error: continue records its failure without
+    condemning the whole run."""
+
+    SPEC = {
+        "name": "tolerant",
+        "steps": [
+            {"id": "core", "type": "noop"},
+            {"id": "optional", "type": "noop", "needs": ["core"], "on_error": "continue"},
+            {"id": "downstream", "type": "noop", "needs": ["optional"]},
+        ],
+    }
+
+    def test_continue_failure_does_not_fail_the_run(self):
+        ctx = replay(
+            [
+                ev(1, "RUN_STARTED"),
+                ev(2, "STEP_SUCCEEDED", "core", output={}),
+                ev(3, "STEP_FAILED", "optional", error="best effort"),
+            ]
+        )
+        self.assertEqual(failed_steps(self.SPEC, ctx), [])
+        self.assertNotEqual(next_run_state(self.SPEC, ctx), RunState.FAILED)
+
+    def test_the_failure_is_still_recorded(self):
+        # The log stays honest even though the run survives.
+        ctx = replay(
+            [ev(1, "RUN_STARTED"), ev(2, "STEP_FAILED", "optional", error="best effort")]
+        )
+        self.assertEqual(ctx["steps"]["optional"]["status"], StepStatus.FAILED)
+        self.assertEqual(ctx["steps"]["optional"]["error"], "best effort")
+
+    def test_dependents_of_a_continued_failure_still_do_not_run(self):
+        ctx = replay(
+            [
+                ev(1, "RUN_STARTED"),
+                ev(2, "STEP_SUCCEEDED", "core", output={}),
+                ev(3, "STEP_FAILED", "optional", error="best effort"),
+            ]
+        )
+        # Readiness requires SUCCEEDED, so the branch stops without anything
+        # having to explicitly cancel it.
+        self.assertNotIn("downstream", ready_steps(self.SPEC, ctx))
+
+    def test_a_normal_failure_still_fails_the_run(self):
+        ctx = replay(
+            [ev(1, "RUN_STARTED"), ev(2, "STEP_FAILED", "core", error="fatal")]
+        )
+        self.assertEqual(failed_steps(self.SPEC, ctx), ["core"])
+        self.assertEqual(next_run_state(self.SPEC, ctx), RunState.FAILED)
+
+
 class RunStateTests(unittest.TestCase):
     def test_running_while_work_remains(self):
         ctx = replay([ev(1, "RUN_STARTED"), ev(2, "STEP_SUCCEEDED", "preflight", output={})])
