@@ -19,7 +19,7 @@ Catching a typo at definition time is a 400 response; catching it at execution t
 is a half-finished workflow at 3am.
 """
 
-KNOWN_STEP_TYPES = {"http", "shell", "wait", "noop"}
+KNOWN_STEP_TYPES = {"http", "shell", "wait", "noop", "approval"}
 
 VALID_ON_ERROR = {"fail", "compensate", "continue"}
 

@@ -153,6 +153,38 @@ WAITING = {
 }
 
 
+APPROVAL = {
+    "name": "demo_approval",
+    "steps": [
+        {"id": "prepare", "type": "noop", "config": {"output": {"ready": True}}},
+        {
+            # No deadline: this parks indefinitely, occupying no worker, no
+            # thread and no connection. It can sit here for a week.
+            "id": "sign_off",
+            "type": "approval",
+            "needs": ["prepare"],
+            "config": {
+                "prompt": "Approve production upgrade of the cluster?",
+                "approvers": ["ops-oncall", "sre-lead"],
+            },
+            "on_error": "compensate",
+        },
+        {
+            "id": "apply",
+            "type": "shell",
+            "needs": ["sign_off"],
+            "config": {
+                "cmd": "python -c \"print('applied after sign-off')\""
+            },
+            "compensate": {
+                "type": "shell",
+                "config": {"cmd": "python -c \"print('reverted')\""},
+            },
+        },
+    ],
+}
+
+
 ROLLING_UPGRADE = {
     "name": "rolling_cluster_upgrade",
     "steps": [
@@ -231,7 +263,9 @@ class Command(BaseCommand):
         tenant = default_tenant()
         self.stdout.write(f"tenant: {tenant.slug}")
 
-        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY, WAITING, ROLLING_UPGRADE):
+        for spec in (
+            LINEAR, DIAMOND, FAILING, SLOW, FLAKY, WAITING, APPROVAL, ROLLING_UPGRADE
+        ):
             existing = WorkflowDef.objects.filter(
                 tenant=tenant, name=spec["name"]
             ).order_by("-version").first()

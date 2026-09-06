@@ -52,15 +52,31 @@ class StepPlugin:
     def validate(self, config):
         """Raise StepValidationError if this config could never execute."""
 
-    def resume_at(self, config, context):
+    def should_defer(self, config, context, step_id):
+        """Should this visit park the step rather than run it?
+
+        A deferring step is visited at least twice: once to park it, once when
+        whatever it was waiting for has happened. The default rule - park unless
+        we are already parked - is right for a timer. Approval overrides it,
+        because "the wait is over" there means a person acted, not that time
+        passed.
+
+        Read from the replayed context, never from a flag held anywhere.
+        """
+        from engine.replay import StepStatus
+
+        return context["steps"].get(step_id, {}).get("status") != StepStatus.WAITING
+
+    def resume_at(self, config, context, step_id=""):
         """For deferring steps: an aware datetime to continue at.
 
         Returning None means "indefinitely" - nothing will pick this step up
-        until something external queues it.
+        until something external queues it. That is exactly what a human
+        approval step wants.
         """
         return None
 
-    def execute(self, config, context, idem_key):
+    def execute(self, config, context, idem_key, step_id=""):
         """Do the work. Return a JSON-serialisable dict, or raise StepError."""
         raise NotImplementedError
 

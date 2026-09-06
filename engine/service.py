@@ -21,6 +21,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from core.models import Tenant
@@ -41,7 +42,7 @@ from engine.replay import (
     ready_steps,
     replay,
 )
-from engine.spec import validate_spec
+from engine.spec import steps_by_id, validate_spec
 
 log = logging.getLogger("cascade.service")
 
@@ -184,6 +185,22 @@ def enqueue_step(run, step_id, kind=TaskKind.EXECUTE, attempt=1, run_after=None)
         return None
 
 
+def next_attempt(run, step_id, kind=TaskKind.EXECUTE):
+    """The next unused attempt number for a step.
+
+    Derived from the task rows rather than from the replayed context, because
+    the two count different things. A step parked on an approval has zero
+    STEP_STARTED events - it never ran - but it does already have a task row at
+    attempt 1. Computing the next attempt from the context would collide with
+    that row's idempotency key, ``enqueue_step`` would return None, and the
+    approved step would silently never be queued.
+    """
+    latest = Task.objects.filter(run=run, step_id=step_id, kind=kind).aggregate(
+        highest=Max("attempt")
+    )["highest"]
+    return (latest or 0) + 1
+
+
 def enqueue_ready_steps(run, spec, context):
     """Enqueue every step whose dependencies are now satisfied."""
     created = []
@@ -307,6 +324,120 @@ def schedule_retry(run, step, task, error):
         run.id, task.step_id, task.attempt, next_attempt, delay,
     )
     return delay
+
+
+def advance_run(run, spec):
+    """Re-derive state from the log, queue whatever is next, close if done.
+
+    The branch here is the whole of saga control flow: while compensating we
+    walk backwards one step at a time; otherwise we fan out forwards as widely
+    as the DAG allows.
+
+    Lives in the service layer rather than the worker because the approval API
+    also needs it - a person denying a step has to advance the run exactly the
+    way a worker recording a failure would, or the two paths drift apart.
+    """
+    context = load_context(run)
+
+    if context["compensating"]:
+        enqueue_next_compensation(run, spec, context)
+    else:
+        enqueue_ready_steps(run, spec, context)
+
+    if close_run_if_finished(run, spec, context):
+        context = load_context(run)
+
+    sync_run_projection(run, spec, context)
+    return context
+
+
+# ---------------------------------------------------------------------------
+# Human approvals
+# ---------------------------------------------------------------------------
+
+
+class ApprovalError(ValueError):
+    """The requested approval cannot be resolved."""
+
+
+def resolve_approval(run, step_id, decision, actor="", comment=""):
+    """Record a human decision on a parked approval step.
+
+    Approving does NOT execute the step here. It records the decision and
+    queues the step, so a worker runs it exactly like any other work - same
+    lease, same heartbeat, same fencing, same retry. An API request that
+    executed workflow steps inline would be a second, weaker execution path
+    with none of those properties.
+    """
+    if decision not in {"approve", "deny"}:
+        raise ApprovalError("decision must be 'approve' or 'deny'")
+
+    spec = run.definition.spec
+    step = steps_by_id(spec).get(step_id)
+    if step is None:
+        raise ApprovalError(f"step {step_id!r} is not in this workflow")
+
+    with transaction.atomic():
+        context = load_context(run)
+        slot = context["steps"].get(step_id, {})
+
+        if not slot.get("approval_requested"):
+            raise ApprovalError(f"step {step_id!r} is not awaiting approval")
+        if slot.get("approved"):
+            raise ApprovalError(f"step {step_id!r} has already been approved")
+        if slot.get("status") != "WAITING":
+            raise ApprovalError(
+                f"step {step_id!r} is {slot.get('status')}, not awaiting approval"
+            )
+
+        if decision == "approve":
+            append_event(
+                run,
+                EventType.APPROVAL_GRANTED,
+                step_id,
+                {"actor": actor, "comment": comment},
+            )
+            # Hand it back to the queue. The worker picks it up, sees the
+            # decision in the replayed log, and completes the step.
+            queued = enqueue_step(
+                run,
+                step_id,
+                attempt=next_attempt(run, step_id),
+                run_after=timezone.now(),
+            )
+            if queued is None:
+                # An idempotency-key collision here means nothing will ever pick
+                # the step up, and the run would sit WAITING forever with the
+                # approval already recorded - stalled, with no error anywhere.
+                # Raising rolls the grant back inside this transaction, so the
+                # approval can simply be retried.
+                raise ApprovalError(
+                    f"could not queue {step_id!r} after approval - a task for this "
+                    "attempt already exists; nothing was recorded, please retry"
+                )
+            log.info("approval granted on %s step=%s by %r", run.id, step_id, actor)
+        else:
+            append_event(
+                run,
+                EventType.APPROVAL_DENIED,
+                step_id,
+                {
+                    "actor": actor,
+                    "comment": comment,
+                    "error": f"approval denied by {actor or 'unknown'}"
+                    + (f": {comment}" if comment else ""),
+                },
+            )
+            log.info("approval denied on %s step=%s by %r", run.id, step_id, actor)
+
+            if step.get("on_error") == "compensate":
+                start_compensation(
+                    run, spec, load_context(run), step_id, "approval denied"
+                )
+
+        advance_run(run, spec)
+
+    return load_context(run)
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ block is done. Don't move on until it's true.
 | 5 | Saga compensation + fake cluster | done |
 | 6 | Entity graph, outbox, triggers | done |
 | 7 | SSE and the live DAG UI | done |
+| 8 | Human approval steps | done |
+| 9 | Multi-tenancy | next |
 
 ---
 
@@ -686,4 +688,73 @@ Open `http://localhost:8000/` and click a workflow to launch it.
 - Human-approval steps are unbuilt; the Block 4 deferral machinery already supports them.
 - The dev server is single-process; each open stream holds a thread. Fine for a demo,
   and the fix is gunicorn with async workers.
+
+
+---
+
+## Block 8 — Human approval steps
+
+Closes the first of the two remaining gaps. It needed almost no new machinery: Block 4's
+deferral already did the hard part.
+
+### What was added
+
+- **`StepPlugin.should_defer(config, context, step_id)`** — deferral becomes a decision
+  the plugin owns rather than a rule hardcoded in the worker.
+- **`ApprovalPlugin`** — `prompt`, `approvers`, optional `timeout_s`.
+- `APPROVAL_REQUESTED` / `APPROVAL_GRANTED` / `APPROVAL_DENIED` events.
+- **`service.resolve_approval`** and **`service.advance_run`** (moved out of the worker).
+- `POST /api/runs/<id>/approve/` and `GET /api/runs/<id>/approvals/`.
+- Approve/Deny controls in the dashboard, and the `demo_approval` workflow.
+
+### Why it is shaped this way
+
+**Approving does not execute anything.** The endpoint records the decision and re-queues
+the step so a *worker* runs it — same lease, same heartbeat, same fencing, same retry. An
+API that executed steps inline would be a second execution path with none of those
+properties, and it would be the one that breaks under load.
+
+**`resume_at` returning None means nothing is queued at all.** No timer, no poll, no row
+waiting to fire. A workflow parked on an approval costs one row in the log and not one
+byte more, indefinitely. Verified: a parked run had *zero* non-DONE tasks.
+
+**`should_defer` had to become a plugin decision.** The old rule — "defer unless already
+WAITING" — is right for a timer but wrong for an approval, where a granted step is still
+WAITING and must not be re-parked. Pushing the decision into the plugin removed a
+special case rather than adding one.
+
+**`TIMER_FIRED` now means "the wait is over", not "the step is done".** A resumed step
+executes through the ordinary path, so it keeps retries, fencing and the lease.
+Completing it inside the deferral handler would have been a weaker second path — the
+same mistake as executing on approval.
+
+**Granting leaves the step WAITING.** The decision is recorded; the step has not run.
+Anything else would let downstream steps unblock before the work happened.
+
+### Two real bugs found while building this
+
+**Silent stall on approval.** `resolve_approval` computed the next attempt from the
+replayed context, but a step parked on an approval has *zero* `STEP_STARTED` events while
+already having a task row at attempt 1. The computed attempt collided, `enqueue_step`
+returned `None` as designed, and the run sat `WAITING` forever with the approval
+recorded and nothing queued. Fixed with `next_attempt()`, which derives from task rows —
+the thing that actually owns attempt numbers.
+
+**And then made loud.** A `None` from `enqueue_step` on this path now raises inside the
+transaction, rolling the grant back so it can be retried. A stall with no error anywhere
+is worse than a failure.
+
+### Verified
+
+Approve: `APPROVAL_REQUESTED → APPROVAL_GRANTED → STEP_STARTED → STEP_SUCCEEDED → apply →
+RUN_SUCCEEDED`, with `{"approved_by": "asha", "comment": "reviewed the change window"}`
+in the step output, driven end to end from the dashboard.
+
+Deny: `APPROVAL_DENIED → RUN_FAILED`, error `sign_off: approval denied by rahul: change
+window closed`, and `apply` never scheduled.
+
+Guards: double-approving returns 409; approving a step that is not awaiting approval
+returns 409.
+
+133 unit tests pass with no database.
 

@@ -102,13 +102,35 @@ class WaitReplayTests(unittest.TestCase):
         )
         self.assertNotIn("after", ready_steps(SPEC, ctx))
 
-    def test_timer_fired_completes_the_step_and_unblocks_downstream(self):
+    def test_timer_fired_means_the_wait_is_over_not_that_the_step_is_done(self):
+        """TIMER_FIRED unparks the step; it does not complete it.
+
+        The step then executes through the ordinary path, so a resumed step
+        gets the same lease, heartbeat, fencing and retry as everything else.
+        Completing it here would be a second, weaker execution path.
+        """
         ctx = replay(
             [
                 ev(1, "RUN_STARTED"),
                 ev(2, "STEP_SUCCEEDED", "before", output={}),
                 ev(3, "TIMER_SET", "settle"),
-                ev(4, "TIMER_FIRED", "settle", output={"waited": True}),
+                ev(4, "TIMER_FIRED", "settle"),
+            ]
+        )
+        self.assertEqual(ctx["steps"]["settle"]["status"], StepStatus.SCHEDULED)
+        self.assertNotIn("settle", ctx["completion_order"])
+        # Still not offered for scheduling - a task row already exists for it.
+        self.assertEqual(ready_steps(SPEC, ctx), [])
+
+    def test_the_step_completes_the_ordinary_way_after_the_timer(self):
+        ctx = replay(
+            [
+                ev(1, "RUN_STARTED"),
+                ev(2, "STEP_SUCCEEDED", "before", output={}),
+                ev(3, "TIMER_SET", "settle"),
+                ev(4, "TIMER_FIRED", "settle"),
+                ev(5, "STEP_STARTED", "settle", attempt=2),
+                ev(6, "STEP_SUCCEEDED", "settle", output={"waited": True}),
             ]
         )
         self.assertEqual(ctx["steps"]["settle"]["status"], StepStatus.SUCCEEDED)

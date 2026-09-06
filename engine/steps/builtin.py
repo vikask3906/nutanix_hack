@@ -1,4 +1,4 @@
-"""Built-in step types: noop, shell, http.
+﻿"""Built-in step types: noop, shell, http.
 
 Each is small on purpose. The interesting engineering is in the engine around
 them, not inside any one plugin.
@@ -34,7 +34,7 @@ class NoopPlugin(StepPlugin):
 
     name = "noop"
 
-    def execute(self, config, context, idem_key):
+    def execute(self, config, context, idem_key, step_id=""):
         return dict(config.get("output", {}))
 
 
@@ -57,7 +57,7 @@ class ShellPlugin(StepPlugin):
         if not config.get("cmd"):
             raise StepValidationError("shell step requires 'cmd'")
 
-    def execute(self, config, context, idem_key):
+    def execute(self, config, context, idem_key, step_id=""):
         cmd = config["cmd"]
         timeout = config.get("timeout_s", DEFAULT_SHELL_TIMEOUT)
 
@@ -120,7 +120,7 @@ class HttpPlugin(StepPlugin):
         if method.upper() not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
             raise StepValidationError(f"unsupported http method {method!r}")
 
-    def execute(self, config, context, idem_key):
+    def execute(self, config, context, idem_key, step_id=""):
         method = config.get("method", "GET").upper()
         url = config["url"]
         timeout = config.get("timeout_s", DEFAULT_HTTP_TIMEOUT)
@@ -208,18 +208,91 @@ class WaitPlugin(StepPlugin):
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
 
-    def resume_at(self, config, context):
+    def resume_at(self, config, context, step_id=""):
         if "until" in config:
             return self._parse(config["until"])
         return datetime.now(timezone.utc) + timedelta(seconds=config["duration_s"])
 
-    def execute(self, config, context, idem_key):
+    def execute(self, config, context, idem_key, step_id=""):
         # Reached only once the timer has fired. There is nothing to do; the
         # passage of time was the work.
         return {"waited": True}
+
+
+class ApprovalPlugin(StepPlugin):
+    """Pause until a person decides.
+
+    Structurally identical to a wait - the workflow parks and the worker is
+    released - but what ends the pause is a human calling::
+
+        POST /api/runs/<id>/approve/  {"step_id": "...", "decision": "approve"}
+
+    ``resume_at`` returns None: nothing is scheduled, because nothing is
+    counting down. The step sits as a row in the log and waits, indefinitely,
+    at zero cost. A workflow can be parked here for a week without occupying a
+    worker, a thread, or a connection.
+
+    An optional ``timeout_s`` arms a deadline, and reaching it without a
+    decision fails the step - which is what you want for anything with an SLA.
+
+    Config::
+
+        {"prompt": "Approve production upgrade?",
+         "approvers": ["ops-oncall"],
+         "timeout_s": 86400}
+    """
+
+    name = "approval"
+    defers = True
+
+    def validate(self, config):
+        if not config.get("prompt"):
+            raise StepValidationError("approval step requires 'prompt'")
+
+        timeout = config.get("timeout_s")
+        if timeout is not None and (
+            not isinstance(timeout, (int, float)) or timeout <= 0
+        ):
+            raise StepValidationError("approval.timeout_s must be a positive number")
+
+        approvers = config.get("approvers", [])
+        if not isinstance(approvers, list):
+            raise StepValidationError("approval.approvers must be a list")
+
+    def should_defer(self, config, context, step_id):
+        """Park only on the first visit.
+
+        Every later visit means something acted: either a decision was recorded
+        and the API queued this step, or the timeout came due. Deferring again
+        would park a step that a person has already approved.
+        """
+        return not context["steps"].get(step_id, {}).get("approval_requested")
+
+    def resume_at(self, config, context, step_id=""):
+        if config.get("timeout_s"):
+            return datetime.now(timezone.utc) + timedelta(seconds=config["timeout_s"])
+        return None  # wait indefinitely - a person is the clock
+
+    def execute(self, config, context, idem_key, step_id=""):
+        slot = context["steps"].get(step_id, {})
+
+        if slot.get("approved"):
+            return {
+                "approved": True,
+                "approved_by": slot.get("approved_by", ""),
+                "comment": slot.get("approval_comment", ""),
+            }
+
+        # Reached without an approval, so the deadline is what woke us.
+        raise StepError(
+            f"approval timed out after {config.get('timeout_s')}s "
+            f"with no decision recorded"
+        )
 
 
 register(NoopPlugin())
 register(ShellPlugin())
 register(HttpPlugin())
 register(WaitPlugin())
+register(ApprovalPlugin())
+

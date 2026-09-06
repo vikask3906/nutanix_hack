@@ -21,11 +21,9 @@ from engine.heartbeat import LeaseHeartbeat
 from engine.models import EventType, TaskKind
 from engine.replay import StepStatus
 from engine.service import (
+    advance_run,
     append_event,
     claim_task,
-    close_run_if_finished,
-    enqueue_next_compensation,
-    enqueue_ready_steps,
     enqueue_step,
     finish_task,
     finish_task_if_owned,
@@ -83,8 +81,22 @@ def execute_task(task, worker_id):
     # It records a timer, queues itself for later, and frees this worker now.
     plugin = _plugin_for(step)
     if plugin is not None and plugin.defers:
-        _handle_deferral(task, run, spec, step, plugin, context, worker_id)
-        return
+        try:
+            config = render(step.get("config", {}), context)
+        except ExpressionError as exc:
+            _record_terminal_failure(task, run, spec, str(exc))
+            return
+
+        if plugin.should_defer(config, context, task.step_id):
+            _handle_deferral(task, run, spec, step, plugin, config, context, worker_id)
+            return
+
+        # Whatever it was waiting for has happened. Mark the wait as over and
+        # fall through - the step now runs like any other, with the same lease,
+        # heartbeat, fencing and retry as everything else.
+        if step["type"] == "wait":
+            append_event(run, EventType.TIMER_FIRED, task.step_id, {})
+            context = load_context(run)
 
     append_event(run, EventType.STEP_STARTED, task.step_id, {"attempt": task.attempt})
 
@@ -93,7 +105,7 @@ def execute_task(task, worker_id):
     # across this is how you deadlock a worker pool. The heartbeat keeps our
     # lease alive for as long as we are genuinely working.
     with LeaseHeartbeat(task, worker_id) as beat:
-        ok, result = _execute_step(step, context, task.idempotency_key)
+        ok, result = _execute_step(step, context, task.idempotency_key, task.step_id)
     # ----------------------------------------------------------------------
 
     # Fencing. If our lease expired mid-step the reaper has already handed this
@@ -135,53 +147,49 @@ def _plugin_for(step):
         return None
 
 
-def _handle_deferral(task, run, spec, step, plugin, context, worker_id):
-    """Two visits to the same step: set the timer, then fire it.
-
-    Which visit we are on is read from the event log, not held anywhere. A step
-    already marked WAITING is one whose timer has come due; anything else is a
-    first arrival.
-    """
-    already_waiting = (
-        context["steps"].get(task.step_id, {}).get("status") == StepStatus.WAITING
-    )
-
+def _handle_deferral(task, run, spec, step, plugin, config, context, worker_id):
+    """Park a step: record why it is waiting, queue its wake-up, free the worker."""
     if not finish_task_if_owned(task, worker_id):
         log.warning("[%s] ABANDON %-13s lease lost", _short(worker_id), task.step_id)
         return
 
-    if already_waiting:
-        log.info("[%s] resume %-14s timer fired", _short(worker_id), task.step_id)
-        with transaction.atomic():
-            append_event(
-                run, EventType.TIMER_FIRED, task.step_id, {"output": {"waited": True}}
-            )
-            _advance(run, spec)
-        return
-
-    try:
-        config = render(step.get("config", {}), context)
-        resume_at = plugin.resume_at(config, context)
-    except ExpressionError as exc:
-        _record_terminal_failure(task, run, spec, str(exc))
-        return
+    resume_at = plugin.resume_at(config, context, task.step_id)
+    is_approval = step["type"] == "approval"
 
     log.info(
-        "[%s] defer  %-14s until %s",
+        "[%s] park   %-14s %s",
         _short(worker_id), task.step_id,
-        resume_at.isoformat() if resume_at else "indefinitely",
+        f"awaiting approval, deadline {resume_at.isoformat()}" if is_approval and resume_at
+        else "awaiting approval, no deadline" if is_approval
+        else f"until {resume_at.isoformat()}",
     )
 
     with transaction.atomic():
-        append_event(
-            run,
-            EventType.TIMER_SET,
-            task.step_id,
-            {"resume_at": resume_at.isoformat() if resume_at else None},
-        )
+        if is_approval:
+            append_event(
+                run,
+                EventType.APPROVAL_REQUESTED,
+                task.step_id,
+                {
+                    "prompt": config.get("prompt", ""),
+                    "approvers": config.get("approvers", []),
+                    "deadline": resume_at.isoformat() if resume_at else None,
+                },
+            )
+        else:
+            append_event(
+                run,
+                EventType.TIMER_SET,
+                task.step_id,
+                {"resume_at": resume_at.isoformat() if resume_at else None},
+            )
+
         if resume_at is not None:
             # The wait IS this row. Nothing is held in memory, so it survives
             # the worker dying, the stack being redeployed, or a restore.
+            #
+            # An approval with no deadline queues nothing at all: it costs a
+            # row in the log and not one byte more until a person decides.
             enqueue_step(
                 run,
                 task.step_id,
@@ -200,6 +208,7 @@ def _run_compensation(task, run, spec, step, context, worker_id):
             {"type": comp.get("type", "noop"), "config": comp.get("config", {})},
             context,
             task.idempotency_key,
+            task.step_id,
         )
 
     if beat.lost or not finish_task_if_owned(task, worker_id):
@@ -214,7 +223,7 @@ def _run_compensation(task, run, spec, step, context, worker_id):
             append_event(
                 run, EventType.STEP_COMPENSATED, task.step_id, {"output": result}
             )
-            _advance(run, spec)
+            advance_run(run, spec)
         return
 
     error = result.get("error", "")
@@ -250,10 +259,10 @@ def _run_compensation(task, run, spec, step, context, worker_id):
                 "attempts": task.attempt,
             },
         )
-        _advance(run, spec)
+        advance_run(run, spec)
 
 
-def _execute_step(step, context, idem_key):
+def _execute_step(step, context, idem_key, step_id=""):
     """Run one step. Returns (ok, result). Never raises."""
     try:
         config = render(step.get("config", {}), context)
@@ -262,7 +271,7 @@ def _execute_step(step, context, idem_key):
 
     try:
         plugin = get_plugin(step["type"])
-        output = plugin.execute(config, context, idem_key)
+        output = plugin.execute(config, context, idem_key, step_id)
         return True, output
     except StepError as exc:
         return False, {"error": str(exc), "details": exc.details}
@@ -274,7 +283,7 @@ def _execute_step(step, context, idem_key):
 def _record_success(task, run, spec, output):
     with transaction.atomic():
         append_event(run, EventType.STEP_SUCCEEDED, task.step_id, {"output": output})
-        _advance(run, spec)
+        advance_run(run, spec)
 
 
 def _record_terminal_failure(task, run, spec, error, details=None):
@@ -292,7 +301,7 @@ def _record_terminal_failure(task, run, spec, error, details=None):
             context = load_context(run)
             start_compensation(run, spec, context, task.step_id, error)
 
-        _advance(run, spec)
+        advance_run(run, spec)
 
 
 def _fail_terminally(task, run, spec, error):
@@ -300,27 +309,7 @@ def _fail_terminally(task, run, spec, error):
     with transaction.atomic():
         append_event(run, EventType.STEP_FAILED, task.step_id, {"error": error})
         finish_task(task)
-        _advance(run, spec)
-
-
-def _advance(run, spec):
-    """Re-derive state from the log, queue whatever is next, close if done.
-
-    The branch here is the whole of saga control flow: while compensating we
-    walk backwards one step at a time; otherwise we fan out forwards as widely
-    as the DAG allows.
-    """
-    context = load_context(run)
-
-    if context["compensating"]:
-        enqueue_next_compensation(run, spec, context)
-    else:
-        enqueue_ready_steps(run, spec, context)
-
-    if close_run_if_finished(run, spec, context):
-        context = load_context(run)
-
-    sync_run_projection(run, spec, context)
+        advance_run(run, spec)
 
 
 def _short(value):

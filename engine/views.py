@@ -4,14 +4,23 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from engine.models import Run, WorkflowDef
+from engine.replay import pending_approvals
 from engine.serializers import (
+    ApprovalDecisionSerializer,
     RunDetailSerializer,
     RunSerializer,
     StartRunSerializer,
     WorkflowDefCreateSerializer,
     WorkflowDefSerializer,
 )
-from engine.service import create_definition, default_tenant, start_run
+from engine.service import (
+    ApprovalError,
+    create_definition,
+    default_tenant,
+    load_context,
+    resolve_approval,
+    start_run,
+)
 from engine.steps import registered_types
 
 
@@ -106,3 +115,41 @@ class RunViewSet(viewsets.ReadOnlyModelViewSet):
         from engine.serializers import RunEventSerializer
 
         return Response(RunEventSerializer(run.events.all(), many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def approvals(self, request, pk=None):
+        """What this run is currently asking a person to decide."""
+        run = self.get_object()
+        context = load_context(run)
+        return Response({"pending": pending_approvals(run.definition.spec, context)})
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        """Record a human decision on a parked approval step.
+
+        Body: {"step_id": "...", "decision": "approve"|"deny",
+               "actor": "...", "comment": "..."}
+
+        Note this does not execute anything. It records the decision and
+        re-queues the step so a worker runs it with the same lease, heartbeat,
+        fencing and retry as any other work. An endpoint that executed steps
+        inline would be a second, weaker execution path.
+        """
+        run = self.get_object()
+        payload = ApprovalDecisionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        try:
+            resolve_approval(
+                run,
+                data["step_id"],
+                data["decision"],
+                actor=data.get("actor", ""),
+                comment=data.get("comment", ""),
+            )
+        except ApprovalError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        run.refresh_from_db()
+        return Response(RunDetailSerializer(run).data)

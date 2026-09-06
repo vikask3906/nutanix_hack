@@ -72,6 +72,13 @@ class RunDetailSerializer(RunSerializer):
         fields = RunSerializer.Meta.fields + ["context", "spec", "events", "tasks"]
 
 
+class ApprovalDecisionSerializer(serializers.Serializer):
+    step_id = serializers.CharField()
+    decision = serializers.ChoiceField(choices=["approve", "deny"])
+    actor = serializers.CharField(required=False, allow_blank=True, default="")
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+
 class StartRunSerializer(serializers.Serializer):
     workflow = serializers.CharField()
     version = serializers.IntegerField(required=False)

@@ -57,6 +57,25 @@
 
   .meta { padding: 0 16px 8px; color: var(--faint); font-size: 12px; }
   .meta b { color: var(--text); font-weight: 600; }
+
+  #approval {
+    margin: 0 16px 10px; padding: 10px 12px; border-radius: 6px;
+    background: rgba(137,87,229,.12); border: 1px solid var(--waiting);
+  }
+  #approval .q { color: var(--text); margin-bottom: 8px; }
+  #approval .who { color: var(--faint); font-size: 11px; margin-bottom: 8px; }
+  #approval button {
+    font: inherit; font-size: 12px; padding: 4px 12px; margin-right: 6px;
+    border-radius: 5px; cursor: pointer; border: 1px solid var(--line);
+    background: #21262d; color: var(--text);
+  }
+  #approval button.yes { border-color: var(--ok); }
+  #approval button.no { border-color: var(--fail); }
+  #approval input {
+    font: inherit; font-size: 12px; padding: 4px 8px; width: 220px;
+    margin-right: 6px; border-radius: 5px;
+    background: #0d1117; color: var(--text); border: 1px solid var(--line);
+  }
   .empty { padding: 40px; color: var(--faint); text-align: center; }
 
   .node rect { transition: fill .25s, stroke .25s; }
@@ -82,6 +101,7 @@
   <div id="right">
     <div>
       <div class="meta" id="meta"></div>
+      <div id="approval" hidden></div>
       <div id="dag"><div class="empty">Select a run, or launch one above.</div></div>
     </div>
     <div id="log"></div>
@@ -244,6 +264,7 @@ async function select(id) {
     (detail.error ? `<br><span style="color:var(--fail)">${esc(detail.error)}</span>` : '');
 
   renderDag();
+  await renderApprovals(id);
   detail.events.forEach(appendLog);
   await loadRuns();
 
@@ -251,6 +272,9 @@ async function select(id) {
     setLive(false);
     return;
   }
+  // An approval with no deadline emits nothing until a person acts, so there
+  // is no point holding a stream open for it.
+  if (detail.status === 'WAITING' && !$('approval').hidden) { setLive(false); return; }
   // Resume the stream from where the snapshot ended - the event log means a
   // client only ever needs "everything after seq N", so nothing is missed and
   // nothing arrives twice.
@@ -280,6 +304,36 @@ function openStream(id, since) {
   });
 
   source.onerror = () => { setLive(false); };
+}
+
+/* ---- human approvals ------------------------------------------------ */
+async function renderApprovals(id) {
+  const box = $('approval');
+  const { pending } = await (await fetch(`/api/runs/${id}/approvals/`)).json();
+
+  if (!pending || !pending.length) { box.hidden = true; box.innerHTML = ''; return; }
+
+  const a = pending[0];
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="q">⏸ ${esc(a.prompt)}</div>` +
+    `<div class="who">step <b>${esc(a.step_id)}</b> · approvers: ${esc((a.approvers || []).join(', ') || 'anyone')}` +
+    ` · ${a.deadline ? 'deadline ' + esc(a.deadline.slice(11, 19)) : 'no deadline — waits indefinitely, costing nothing'}</div>` +
+    `<input id="actor" placeholder="your name" value="ops-oncall">` +
+    `<button class="yes" id="yes">Approve</button>` +
+    `<button class="no" id="no">Deny</button>`;
+
+  $('yes').onclick = () => decide(id, a.step_id, 'approve');
+  $('no').onclick = () => decide(id, a.step_id, 'deny');
+}
+
+async function decide(id, step_id, decision) {
+  const actor = ($('actor') || {}).value || 'anonymous';
+  await fetch(`/api/runs/${id}/approve/`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ step_id, decision, actor })
+  });
+  await select(id);   // re-read; the worker takes it from here
 }
 
 function setLive(on) {

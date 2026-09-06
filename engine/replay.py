@@ -96,6 +96,8 @@ def _step_slot(context, step_id):
             "attempts": 0,
             "compensated": False,
             "compensation_failed": False,
+            "approval_requested": False,
+            "approved": False,
         },
     )
 
@@ -148,11 +150,38 @@ def apply_event(context, event):
         slot["status"] = StepStatus.WAITING
 
     elif etype == "TIMER_FIRED":
+        # The wait is over - NOT the step is done. The step now executes like
+        # any other, going through STEP_STARTED and STEP_SUCCEEDED. Keeping one
+        # execution path for every step, deferred or not, is what stops
+        # "resumed" work quietly skipping retries, fencing and the lease.
         slot = _step_slot(context, step_id)
-        slot["status"] = StepStatus.SUCCEEDED
-        slot["output"] = payload.get("output", {})
-        if step_id not in context["completion_order"]:
-            context["completion_order"].append(step_id)
+        slot["status"] = StepStatus.SCHEDULED
+
+    elif etype == "APPROVAL_REQUESTED":
+        slot = _step_slot(context, step_id)
+        slot["status"] = StepStatus.WAITING
+        slot["approval_requested"] = True
+        slot["approval_prompt"] = payload.get("prompt", "")
+        slot["approvers"] = payload.get("approvers", [])
+        slot["approval_deadline"] = payload.get("deadline")
+
+    elif etype == "APPROVAL_GRANTED":
+        slot = _step_slot(context, step_id)
+        # Status stays WAITING: the decision is recorded, but the step has not
+        # run yet. A worker still has to pick it up and execute it, and until
+        # then it must not look ready to schedule again.
+        slot["approved"] = True
+        slot["approved_by"] = payload.get("actor", "")
+        slot["approval_comment"] = payload.get("comment", "")
+
+    elif etype == "APPROVAL_DENIED":
+        slot = _step_slot(context, step_id)
+        slot["status"] = StepStatus.FAILED
+        slot["approved"] = False
+        slot["approved_by"] = payload.get("actor", "")
+        slot["error"] = payload.get(
+            "error", f"approval denied by {payload.get('actor', 'unknown')}"
+        )
 
     elif etype == "COMPENSATION_STARTED":
         context["compensating"] = True
@@ -325,8 +354,29 @@ def _steps_with_status(spec, context, status):
 
 
 def waiting_steps(spec, context):
-    """Steps parked on a durable timer."""
+    """Steps parked on a durable timer or on a person."""
     return _steps_with_status(spec, context, StepStatus.WAITING)
+
+
+def pending_approvals(spec, context):
+    """Steps parked waiting for a human decision, with what they are asking."""
+    out = []
+    for step in spec.get("steps", []):
+        slot = context["steps"].get(step["id"], {})
+        if (
+            slot.get("approval_requested")
+            and not slot.get("approved")
+            and slot.get("status") == StepStatus.WAITING
+        ):
+            out.append(
+                {
+                    "step_id": step["id"],
+                    "prompt": slot.get("approval_prompt", ""),
+                    "approvers": slot.get("approvers", []),
+                    "deadline": slot.get("approval_deadline"),
+                }
+            )
+    return out
 
 
 def running_steps(spec, context):
