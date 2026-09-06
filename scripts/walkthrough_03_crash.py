@@ -119,8 +119,16 @@ if victim is None:
 owner = victim["lease_owner"]
 container = owner.split(":")[0]  # host:pid:random - the host IS the container id
 
+def seconds_left(iso):
+    """Lease deadlines come back in UTC; the terminal clock is local. Showing
+    both side by side looks like a bug on camera, so show the gap instead."""
+    from datetime import datetime, timezone
+    when = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return max(0, round((when - datetime.now(timezone.utc)).total_seconds()))
+
+
 stamp(f"long_task claimed by worker {owner}")
-stamp(f"lease expires at {victim['lease_expires_at'][11:19]} unless renewed")
+stamp(f"lease expires in {seconds_left(victim['lease_expires_at'])}s unless renewed")
 print()
 print("  Letting it run for a few seconds so the heartbeat has to renew...")
 time.sleep(6)
@@ -128,7 +136,8 @@ time.sleep(6)
 detail = fetch(run_id)
 task = leased_task(detail)
 if task:
-    stamp(f"lease renewed, now expires {task['lease_expires_at'][11:19]} (heartbeat working)")
+    stamp(f"lease renewed - {seconds_left(task['lease_expires_at'])}s left again "
+          f"(the heartbeat is working)")
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +169,10 @@ print()
 
 seen = len(fetch(run_id)["events"])
 recovered_at = None
-deadline = time.time() + 120
+# The happy path is ~43s: a 25s step, up to 10s of lease, and a reaper sweep.
+# The margin is deliberately generous - reporting "RUNNING" because we gave up
+# a few seconds early would look like a failure on camera when the run is fine.
+deadline = time.time() + 240
 
 while time.time() < deadline:
     detail = fetch(run_id)

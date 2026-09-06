@@ -43,3 +43,6 @@ node_modules/
 randperson.txt
 approvalrun.txt
 waitrun.txt
+
+# personal working notes, not part of the submission
+_private/
