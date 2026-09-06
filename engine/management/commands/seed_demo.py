@@ -1,0 +1,118 @@
+"""Seed demo workflow definitions.
+
+    python manage.py seed_demo
+
+Two shapes, both runnable with no external services:
+
+    demo_linear   a four-step pipeline, to watch state advance
+    demo_diamond  fan-out and join, to watch three workers cooperate
+"""
+
+from django.core.management.base import BaseCommand
+
+from engine.models import WorkflowDef
+from engine.service import create_definition, default_tenant
+
+LINEAR = {
+    "name": "demo_linear",
+    "steps": [
+        {
+            "id": "fetch",
+            "type": "noop",
+            "config": {"output": {"records": 3, "source": "inventory"}},
+        },
+        {
+            "id": "transform",
+            "type": "shell",
+            "needs": ["fetch"],
+            "config": {
+                "cmd": "python -c \"print('transformed {{ steps.fetch.output.records }} records')\""
+            },
+        },
+        {
+            "id": "validate",
+            "type": "shell",
+            "needs": ["transform"],
+            "config": {"cmd": "python -c \"print('validation passed')\""},
+        },
+        {
+            "id": "publish",
+            "type": "noop",
+            "needs": ["validate"],
+            "config": {"output": {"published": True}},
+        },
+    ],
+}
+
+DIAMOND = {
+    "name": "demo_diamond",
+    "steps": [
+        {"id": "start", "type": "noop", "config": {"output": {"ok": True}}},
+        {
+            "id": "branch_a",
+            "type": "shell",
+            "needs": ["start"],
+            "config": {"cmd": "python -c \"import time; time.sleep(2); print('A done')\""},
+        },
+        {
+            "id": "branch_b",
+            "type": "shell",
+            "needs": ["start"],
+            "config": {"cmd": "python -c \"import time; time.sleep(2); print('B done')\""},
+        },
+        {
+            "id": "branch_c",
+            "type": "shell",
+            "needs": ["start"],
+            "config": {"cmd": "python -c \"import time; time.sleep(2); print('C done')\""},
+        },
+        {
+            "id": "join",
+            "type": "noop",
+            "needs": ["branch_a", "branch_b", "branch_c"],
+            "config": {"output": {"merged": True}},
+        },
+    ],
+}
+
+FAILING = {
+    "name": "demo_failing",
+    "steps": [
+        {"id": "setup", "type": "noop", "config": {"output": {"ready": True}}},
+        {
+            "id": "risky",
+            "type": "shell",
+            "needs": ["setup"],
+            "config": {"cmd": "python -c \"raise SystemExit(1)\""},
+        },
+        {"id": "never_runs", "type": "noop", "needs": ["risky"]},
+    ],
+}
+
+
+class Command(BaseCommand):
+    help = "Create the demo workflow definitions."
+
+    def handle(self, *args, **options):
+        tenant = default_tenant()
+        self.stdout.write(f"tenant: {tenant.slug}")
+
+        for spec in (LINEAR, DIAMOND, FAILING):
+            existing = WorkflowDef.objects.filter(
+                tenant=tenant, name=spec["name"]
+            ).order_by("-version").first()
+
+            if existing and existing.spec.get("steps") == spec["steps"]:
+                self.stdout.write(f"  {existing} already up to date")
+                continue
+
+            definition = create_definition(tenant, spec)
+            self.stdout.write(self.style.SUCCESS(f"  created {definition}"))
+
+        self.stdout.write("")
+        self.stdout.write("Start a run:")
+        self.stdout.write(
+            '  curl -X POST http://localhost:8000/api/runs/ '
+            '-H "Content-Type: application/json" '
+            '-d \'{"workflow": "demo_diamond"}\''
+        )

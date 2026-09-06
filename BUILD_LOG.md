@@ -11,8 +11,8 @@ block is done. Don't move on until it's true.
 |---|---|---|
 | 0 | Django scaffold, data model, worker stub | done |
 | 1 | Replay and DAG readiness — the engine's brain | done |
-| 2 | The worker loop: claim, execute, record | next |
-| 3 | Retries, idempotency, the lease reaper | |
+| 2 | The worker loop, step plugins, REST API | done |
+| 3 | Retries, backoff, the lease reaper | next |
 | 4 | Parallel fan-out, durable timers | |
 | 5 | Saga compensation | |
 | 6 | Entity graph, outbox, triggers | |
@@ -167,3 +167,93 @@ next. Shuffle the events and the answer doesn't change.
 Block 2's worker loop is now mostly plumbing: claim a task, call `replay`, execute one
 step, append an event, call `ready_steps`, insert the next tasks. The hard thinking is
 already done and already tested.
+
+---
+
+## Block 2 — The worker loop
+
+### What was added
+
+- **`engine/expressions.py`** — `{{ input.x }}` and `{{ steps.a.output.b }}` resolution.
+- **`engine/steps/`** — the plugin contract and registry, plus `noop`, `shell`, `http`.
+- **`engine/service.py`** — every transactional operation: append event, enqueue,
+  claim, start run, sync projection.
+- **`engine/worker.py`** — claim, replay, execute, record, enqueue next.
+- **`engine/views.py` + `serializers.py` + `urls.py`** — the REST API.
+- **`manage.py seed_demo`** — three demo workflows that need no external services.
+
+### Why it is shaped this way
+
+**The transaction rule.** Claim in one short transaction, execute *outside any
+transaction*, record in another. Executing inside the claim transaction holds a row
+lock across network I/O, and with several workers that deadlocks within minutes. If a
+worker dies between claiming and recording, the lease expires and Block 3's reaper
+recovers the task — which is exactly why long transactions are unnecessary.
+
+**Optimistic sequence allocation.** `append_event` reads `last_seq`, tries to write
+`last_seq + 1`, and lets `UNIQUE(run_id, seq)` arbitrate. On `IntegrityError` it
+re-reads and retries. That is the concurrency control for the whole engine: no advisory
+lock, no lock service, no consensus — one unique index.
+
+**Enqueue collisions are the design working, not an error.** When two workers finish
+parallel branches at the same instant, both compute that the join step is ready and
+both try to enqueue it. The unique idempotency key means exactly one row is created and
+`enqueue_step` returns `None` for the loser. Silently correct.
+
+**The API executes nothing.** `POST /api/runs/` writes rows and returns — measured at
+159 ms, with `last_seq: 2`. A worker picks the first task up within its poll interval.
+That separation is why a 3-second workflow and a 3-day workflow are the same code path.
+
+**`shell=False` and `shlex.split`.** Step configs are rendered from run input, which in
+production comes from outside. Handing that to a shell is a command injection. Note
+that this is *not* a sandbox — real isolation means a container per step. Do not
+describe it as sandboxed.
+
+**Whole-string expressions preserve type.** `"{{ input.count }}"` yields `3`, while
+`"node-{{ input.count }}"` yields `"node-3"`. Without that rule every templated value
+silently becomes a string and steps expecting numbers break.
+
+**Pagination on list endpoints.** Runs accumulate without bound; an unpaginated list is
+a slow outage waiting to happen once a demo has been running an hour.
+
+### How to see it
+
+```bash
+docker compose exec web python manage.py seed_demo
+```
+
+```bash
+.venv\Scripts\python.exe scripts/walkthrough_02_worker.py
+```
+
+Then watch which worker did what:
+
+```bash
+docker compose logs worker | grep claim
+```
+
+### Verified
+
+- **Linear run**: `POST` returned in 159 ms with `status: RUNNING`; workers drove it to
+  `SUCCEEDED` through 14 events.
+- **Templating across steps**: `fetch` produced `{"records": 3}`; `transform`'s shell
+  command rendered to `transformed 3 records` — resolved from state rebuilt from the
+  log, not handed over by the previous worker.
+- **Real parallelism**: the three diamond branches ran on three *different* workers with
+  overlapping timestamps (`58.277-00.299`, `58.288-00.310`, `58.796-00.815`). 3.1s wall
+  clock for three 2-second branches. `join` ran only after all three landed.
+- **Failure isolation**: `risky` failed, run went `FAILED`, and `never_runs` was never
+  scheduled — no task row was ever created for it. Nothing had to explicitly cancel it.
+- 60 unit tests still pass with no database.
+
+### Checkpoint
+
+`POST /api/runs/` starts a run and three workers cooperatively drain it, with the
+event log showing exactly what happened.
+
+### Known gaps, closed in Block 3
+
+- Every step failure is terminal. `retry` blocks are validated but not honoured yet.
+- No lease heartbeat and no reaper, so a `kill -9` mid-step currently strands the task
+  in `LEASED` forever. This is the next thing to fix, and it is the demo moment.
+- `wait` is spec-valid but has no plugin — it becomes a durable timer in Block 4.
