@@ -37,8 +37,28 @@ class StepValidationError(ValueError):
 class StepPlugin:
     name = ""
 
+    # A deferring step does no work when it is first reached. Instead the engine
+    # asks it WHEN to come back, records a timer, and queues the step again for
+    # that moment. The worker is released immediately.
+    #
+    # This is the difference between a workflow that can wait three days and one
+    # that cannot. A step that slept in-process would pin a worker for the whole
+    # duration and lose the wait entirely on the next deploy.
+    #
+    # `wait` uses this today. A human-approval step is the same shape: defer
+    # with no fixed resume time, and let an API call queue it.
+    defers = False
+
     def validate(self, config):
         """Raise StepValidationError if this config could never execute."""
+
+    def resume_at(self, config, context):
+        """For deferring steps: an aware datetime to continue at.
+
+        Returning None means "indefinitely" - nothing will pick this step up
+        until something external queues it.
+        """
+        return None
 
     def execute(self, config, context, idem_key):
         """Do the work. Return a JSON-serialisable dict, or raise StepError."""

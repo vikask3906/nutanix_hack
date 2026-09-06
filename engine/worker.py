@@ -19,12 +19,14 @@ from engine import retry
 from engine.expressions import ExpressionError, render
 from engine.heartbeat import LeaseHeartbeat
 from engine.models import EventType, TaskKind
+from engine.replay import StepStatus
 from engine.service import (
     append_event,
     claim_task,
     close_run_if_finished,
     enqueue_next_compensation,
     enqueue_ready_steps,
+    enqueue_step,
     finish_task,
     finish_task_if_owned,
     load_context,
@@ -77,6 +79,13 @@ def execute_task(task, worker_id):
         _run_compensation(task, run, spec, step, context, worker_id)
         return
 
+    # A deferring step (wait, and later approval) does no work on first reach.
+    # It records a timer, queues itself for later, and frees this worker now.
+    plugin = _plugin_for(step)
+    if plugin is not None and plugin.defers:
+        _handle_deferral(task, run, spec, step, plugin, context, worker_id)
+        return
+
     append_event(run, EventType.STEP_STARTED, task.step_id, {"attempt": task.attempt})
 
     # ---- execute OUTSIDE any transaction ---------------------------------
@@ -117,6 +126,69 @@ def execute_task(task, worker_id):
 
     log.warning("[%s] FAILED %-14s %s", _short(worker_id), task.step_id, error)
     _record_terminal_failure(task, run, spec, error, result.get("details"))
+
+
+def _plugin_for(step):
+    try:
+        return get_plugin(step["type"])
+    except StepError:
+        return None
+
+
+def _handle_deferral(task, run, spec, step, plugin, context, worker_id):
+    """Two visits to the same step: set the timer, then fire it.
+
+    Which visit we are on is read from the event log, not held anywhere. A step
+    already marked WAITING is one whose timer has come due; anything else is a
+    first arrival.
+    """
+    already_waiting = (
+        context["steps"].get(task.step_id, {}).get("status") == StepStatus.WAITING
+    )
+
+    if not finish_task_if_owned(task, worker_id):
+        log.warning("[%s] ABANDON %-13s lease lost", _short(worker_id), task.step_id)
+        return
+
+    if already_waiting:
+        log.info("[%s] resume %-14s timer fired", _short(worker_id), task.step_id)
+        with transaction.atomic():
+            append_event(
+                run, EventType.TIMER_FIRED, task.step_id, {"output": {"waited": True}}
+            )
+            _advance(run, spec)
+        return
+
+    try:
+        config = render(step.get("config", {}), context)
+        resume_at = plugin.resume_at(config, context)
+    except ExpressionError as exc:
+        _record_terminal_failure(task, run, spec, str(exc))
+        return
+
+    log.info(
+        "[%s] defer  %-14s until %s",
+        _short(worker_id), task.step_id,
+        resume_at.isoformat() if resume_at else "indefinitely",
+    )
+
+    with transaction.atomic():
+        append_event(
+            run,
+            EventType.TIMER_SET,
+            task.step_id,
+            {"resume_at": resume_at.isoformat() if resume_at else None},
+        )
+        if resume_at is not None:
+            # The wait IS this row. Nothing is held in memory, so it survives
+            # the worker dying, the stack being redeployed, or a restore.
+            enqueue_step(
+                run,
+                task.step_id,
+                attempt=task.attempt + 1,
+                run_after=resume_at,
+            )
+        sync_run_projection(run, spec, load_context(run))
 
 
 def _run_compensation(task, run, spec, step, context, worker_id):

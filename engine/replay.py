@@ -304,4 +304,31 @@ def next_run_state(spec, context):
     if is_complete(spec, context):
         return RunState.SUCCEEDED
 
+    # Only park the whole run as WAITING when nothing else is actually moving -
+    # one branch on a timer while another executes is still a RUNNING run.
+    #
+    # The distinction matters operationally: a run sitting on a three-day timer
+    # looks identical to a wedged one otherwise, and someone will eventually
+    # "fix" it by hand.
+    if waiting_steps(spec, context) and not running_steps(spec, context):
+        return RunState.WAITING
+
     return RunState.RUNNING
+
+
+def _steps_with_status(spec, context, status):
+    return [
+        s["id"]
+        for s in spec.get("steps", [])
+        if context["steps"].get(s["id"], {}).get("status") == status
+    ]
+
+
+def waiting_steps(spec, context):
+    """Steps parked on a durable timer."""
+    return _steps_with_status(spec, context, StepStatus.WAITING)
+
+
+def running_steps(spec, context):
+    """Steps a worker is executing right now."""
+    return _steps_with_status(spec, context, StepStatus.RUNNING)

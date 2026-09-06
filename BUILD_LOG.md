@@ -13,7 +13,7 @@ block is done. Don't move on until it's true.
 | 1 | Replay and DAG readiness â€” the engine's brain | done |
 | 2 | The worker loop, step plugins, REST API | done |
 | 3 | Retries, backoff, the lease reaper | done |
-| 4 | Durable timers (parallel already works) | next |
+| 4 | Durable timers | done |
 | 5 | Saga compensation + fake cluster | done |
 | 6 | Entity graph, outbox, triggers | done |
 | 7 | SSE and the DAG UI | |
@@ -538,4 +538,88 @@ completely different entity type, neither workflow aware of the other.
 - Multi-tenancy is designed (`DESIGN.md` §11) but `current_tenant()` still returns the
   single default tenant. It is behind one function, so the change lands in one place.
 - No SSE or DAG UI; the admin and these scripts are the interface.
+
+
+---
+
+## Block 4 — Durable timers
+
+Taken last, after the demo-critical blocks. It closes the `wait` gap and makes the
+"Postgres is the queue AND the timer" claim concrete.
+
+### What was added
+
+- **`StepPlugin.defers` / `resume_at()`** — deferral as a first-class plugin capability.
+- **`WaitPlugin`** — `{"duration_s": 45}` or `{"until": "2026-09-08T09:00:00Z"}`.
+- **`worker._handle_deferral`** — sets the timer on first arrival, fires it on the second.
+- **`RunState.WAITING`**, plus `waiting_steps()` and `running_steps()`.
+- `demo_wait` workflow and walkthrough 6.
+
+### Why it is shaped this way
+
+**Nothing sleeps.** A step that called `sleep()` would pin a worker for the whole
+duration and lose the wait entirely on the next deploy. Instead the step records a timer
+and queues itself for a future moment; the worker is released immediately. The wait *is*
+a `tasks` row with a future `run_after` — the same row shape as ready work and as a
+backoff retry.
+
+That is why Cascade has no scheduler process, no timer service and no Celery beat.
+Nothing is counting down anywhere, so there is nothing to lose.
+
+**Two visits to the same step, and which visit we are on is read from the log.** A step
+already marked `WAITING` is one whose timer came due; anything else is a first arrival.
+No flag is held anywhere.
+
+**Deferral is a plugin capability, not a special case for `wait`.** A human-approval
+step is the same shape: defer with `resume_at` returning `None` (indefinitely) and let
+an API call queue it. That lands without touching the worker.
+
+**`WAITING` is distinguished from `RUNNING`** — but only when nothing else is moving; one
+branch parked while another executes is still a running run. A run sitting on a
+three-day timer otherwise looks identical to a wedged one, and someone will eventually
+"fix" it by hand.
+
+**Naive timestamps in `until` are treated as UTC.** Adopting the worker's local clock
+would make the same workflow resume at different moments depending on which host ran it.
+
+### How to see it
+
+```bash
+.venv\Scripts\python.exe scripts/walkthrough_06_durable_wait.py
+```
+
+The script runs `docker compose down` on your behalf and brings the stack back.
+
+### Verified
+
+A run with a 45-second wait reported `WAITING`, with the entire wait visible as one row:
+
+```
+step: settle   status: READY   run_after: 2026-09-06T06:45:08Z   attempt: 2
+```
+
+Then **every container was destroyed** — web, all three workers, the reaper, the
+dispatcher, and the network — at 12:17:11, and restored at 12:17:20. Brand new processes
+that had never seen the run:
+
+```
+12:17:48  [ 7] TIMER_FIRED          settle
+12:17:48  [10] STEP_SUCCEEDED       after
+12:17:48  [11] RUN_SUCCEEDED
+```
+
+Final step output: `resumed after the wait`.
+
+The same property that survives `kill -9` survives a full redeploy, and would survive
+restoring the database onto a different machine. Change `duration_s` to `259200` and it
+is a three-day wait with no other change to the system.
+
+116 unit tests pass with no database.
+
+### Remaining gaps
+
+- Multi-tenancy is designed (`DESIGN.md` §11) but `current_tenant()` still returns the
+  single default tenant. It is behind one function, so the change lands in one place.
+- No SSE or DAG UI; the admin and the walkthrough scripts are the interface.
+- Human-approval steps are unbuilt, but the deferral machinery they need now exists.
 

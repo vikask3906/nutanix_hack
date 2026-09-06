@@ -131,6 +131,28 @@ FLAKY = {
 }
 
 
+WAITING = {
+    "name": "demo_wait",
+    "steps": [
+        {"id": "before", "type": "noop", "config": {"output": {"phase": "before"}}},
+        {
+            # Long enough to restart the entire stack while it is parked.
+            # Nothing sleeps: this is one tasks row with a future run_after.
+            "id": "settle",
+            "type": "wait",
+            "needs": ["before"],
+            "config": {"duration_s": 45},
+        },
+        {
+            "id": "after",
+            "type": "shell",
+            "needs": ["settle"],
+            "config": {"cmd": "python -c \"print('resumed after the wait')\""},
+        },
+    ],
+}
+
+
 ROLLING_UPGRADE = {
     "name": "rolling_cluster_upgrade",
     "steps": [
@@ -209,7 +231,7 @@ class Command(BaseCommand):
         tenant = default_tenant()
         self.stdout.write(f"tenant: {tenant.slug}")
 
-        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY, ROLLING_UPGRADE):
+        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY, WAITING, ROLLING_UPGRADE):
             existing = WorkflowDef.objects.filter(
                 tenant=tenant, name=spec["name"]
             ).order_by("-version").first()

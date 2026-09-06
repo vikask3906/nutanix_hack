@@ -6,6 +6,7 @@ them, not inside any one plugin.
 
 import shlex
 import subprocess
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -158,6 +159,67 @@ class HttpPlugin(StepPlugin):
         return output
 
 
+class WaitPlugin(StepPlugin):
+    """Pause the workflow, without pausing anything.
+
+    Nothing sleeps. The step records a timer and queues itself for a future
+    moment; the worker moves on to other work immediately. The wait lives in a
+    ``tasks`` row with a future ``run_after`` - the same row shape as a ready
+    task and a backoff retry.
+
+    That is why Cascade has no scheduler process and no timer service, and why a
+    wait survives every worker dying, the whole stack being redeployed, or the
+    database being restored from a backup. There is nothing in memory to lose.
+
+    Config is either a duration or an absolute time::
+
+        {"duration_s": 3600}
+        {"until": "2026-09-08T09:00:00Z"}
+    """
+
+    name = "wait"
+    defers = True
+
+    def validate(self, config):
+        if "duration_s" not in config and "until" not in config:
+            raise StepValidationError("wait step requires 'duration_s' or 'until'")
+
+        if "duration_s" in config:
+            duration = config["duration_s"]
+            if not isinstance(duration, (int, float)) or duration < 0:
+                raise StepValidationError(
+                    "wait.duration_s must be a non-negative number"
+                )
+
+        if "until" in config:
+            try:
+                self._parse(config["until"])
+            except ValueError as exc:
+                raise StepValidationError(
+                    f"wait.until must be an ISO 8601 timestamp: {exc}"
+                ) from exc
+
+    @staticmethod
+    def _parse(value):
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            # A naive timestamp is ambiguous across deployments. Assume UTC
+            # rather than silently adopting whatever the worker's clock says.
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def resume_at(self, config, context):
+        if "until" in config:
+            return self._parse(config["until"])
+        return datetime.now(timezone.utc) + timedelta(seconds=config["duration_s"])
+
+    def execute(self, config, context, idem_key):
+        # Reached only once the timer has fired. There is nothing to do; the
+        # passage of time was the work.
+        return {"waited": True}
+
+
 register(NoopPlugin())
 register(ShellPlugin())
 register(HttpPlugin())
+register(WaitPlugin())
