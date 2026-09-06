@@ -16,7 +16,7 @@ block is done. Don't move on until it's true.
 | 4 | Durable timers | done |
 | 5 | Saga compensation + fake cluster | done |
 | 6 | Entity graph, outbox, triggers | done |
-| 7 | SSE and the DAG UI | |
+| 7 | SSE and the live DAG UI | done |
 
 ---
 
@@ -622,4 +622,68 @@ is a three-day wait with no other change to the system.
   single default tenant. It is behind one function, so the change lands in one place.
 - No SSE or DAG UI; the admin and the walkthrough scripts are the interface.
 - Human-approval steps are unbuilt, but the deferral machinery they need now exists.
+
+
+---
+
+## Block 7 — SSE and the live DAG
+
+### What was added
+
+- **`engine/streaming.py`** — `GET /api/runs/<id>/stream/`, server-sent events.
+- **`templates/dashboard.html`** — the live DAG at `/`. One file, vanilla JS, inline
+  SVG. No npm, no build step, no dependency that can fail to install at 3am.
+
+### Why it is shaped this way
+
+**Polling, not LISTEN/NOTIFY, and the comment in the source says so.** Postgres can push
+these events with no polling at all and it is the better answer at scale. It is not what
+is here because `LISTEN` needs a dedicated connection held open outside Django's pooling
+for the life of the stream, and getting that wrong leaks connections until Postgres
+refuses new ones. A 300ms indexed query on `(run_id, seq)` costs nothing at demo scale
+and cannot leak. The seam is `_events_since` — swapping it touches one function.
+
+**`?since=<seq>` resume.** A client only ever needs "everything after seq N", so a
+reconnecting browser picks up exactly where it left off — no snapshot, no missed events,
+no duplicates. That falls out of the log being the source of truth; a mutable-state
+design would need a snapshot-plus-delta protocol here.
+
+**The browser does not fold events.** It re-reads derived state from the server after
+each event rather than maintaining its own `replay()`. Two independent folds of the same
+log will eventually disagree, and then you are debugging a UI that shows a state the
+engine was never in.
+
+**`close_old_connections()` in a `finally`.** The generator outlives the normal request
+cycle, so Django's usual cleanup has already run by the time it yields. Without this,
+every stream leaks a connection.
+
+**Heartbeat comment frames.** A run parked on a three-day timer emits nothing for three
+days; without a keepalive, proxies and browsers decide the stream is dead.
+
+### How to see it
+
+Open `http://localhost:8000/` and click a workflow to launch it.
+
+### Verified
+
+- `demo_diamond` streamed 12+ frames live, including the three `STEP_STARTED` events for
+  the parallel branches arriving together.
+- The DAG renders left-to-right by longest-path depth, nodes coloured by status, running
+  steps pulsing, completed edges turning green.
+- A forced rollback rendered exactly as intended: `preflight` green, `drain` and
+  `upgrade` orange `COMPENSATED`, `verify` red `FAILED`, the 503 in the header, and
+  `COMPENSATION_STARTED → STEP_COMPENSATED upgrade → STEP_COMPENSATED drain → RUN_FAILED`
+  in the log.
+- The run list refreshes every 3s, so runs started by the graph dispatcher appear on
+  their own, marked `auto`.
+
+116 unit tests still pass.
+
+### Remaining gaps
+
+- Multi-tenancy is designed (`DESIGN.md` §11) but `current_tenant()` still returns the
+  single default tenant. It sits behind one function.
+- Human-approval steps are unbuilt; the Block 4 deferral machinery already supports them.
+- The dev server is single-process; each open stream holds a thread. Fine for a demo,
+  and the fix is gunicorn with async workers.
 

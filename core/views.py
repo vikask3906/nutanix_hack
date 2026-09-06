@@ -1,5 +1,11 @@
 from django.db import connection
 from django.http import JsonResponse
+from django.shortcuts import render
+
+
+def dashboard(request):
+    """The live DAG view. One template, no build step, no npm."""
+    return render(request, "dashboard.html")
 
 
 def healthz(_request):
