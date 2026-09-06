@@ -5,185 +5,184 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cascade</title>
 <style>
-  :root {
-    --ink-0:#080b11; --ink-1:#0e131c; --ink-2:#141b26; --ink-3:#1b2431;
-    --line:#232e3d; --line-2:#2e3b4d;
-    --fg:#e8eef7; --fg-dim:#93a1b5; --fg-faint:#5f6d80;
-    --accent:#4cc2ff; --accent-dim:#1d5f80;
+  :root{
+    --bg:#F7F4F1; --surface:#FFFFFF; --surface-2:#FBF8F5; --surface-3:#F3EDE7;
+    --line:#EBE4DC; --line-2:#DCD2C6;
+    --fg:#1C1917; --fg-dim:#7A716A; --fg-faint:#A9A099;
+    --accent:#F0562D; --accent-soft:#FDEDE7; --accent-line:#F8BCA6;
 
-    --st-pending:#3b4757; --st-scheduled:#3b6ea8; --st-running:#e0a020;
-    --st-ok:#2fb673; --st-fail:#e05561; --st-wait:#9a7bea; --st-undo:#e08544;
+    --ok:#12A150;      --ok-bg:#E6F7EE;   --ok-line:#9FE0BC;
+    --run:#C2740A;     --run-bg:#FDF3E0;  --run-line:#EFCB8D;
+    --fail:#D63A31;    --fail-bg:#FDEBEA; --fail-line:#F2AFAA;
+    --wait:#7A48D6;    --wait-bg:#F1EBFC; --wait-line:#C9B2F0;
+    --undo:#DD6B12;    --undo-bg:#FDF0E3; --undo-line:#F1C08A;
+    --pend:#A9A099;    --pend-bg:#F5F1ED; --pend-line:#E2DAD2;
 
-    --r:7px;
+    --r:9px;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
     --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sh:0 1px 2px rgba(28,25,23,.05), 0 1px 3px rgba(28,25,23,.04);
+    --sh-2:0 4px 12px rgba(28,25,23,.07), 0 1px 3px rgba(28,25,23,.05);
   }
-  * { box-sizing:border-box; }
-  /* Must beat the display:flex/grid rules below - the browser default for
-     [hidden] is display:none, which any explicit display value overrides. */
-  [hidden] { display:none !important; }
-  html,body { height:100%; }
-  body {
-    margin:0; background:var(--ink-0); color:var(--fg);
-    font:13.5px/1.55 var(--sans);
-    -webkit-font-smoothing:antialiased;
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:13.5px/1.55 var(--sans); -webkit-font-smoothing:antialiased;
     display:flex; flex-direction:column; overflow:hidden;
   }
-  button { font:inherit; }
+  button{font:inherit}
 
-  /* ---------- top bar ---------- */
-  .topbar {
-    flex:none; display:flex; align-items:center; gap:14px;
-    padding:0 16px; height:52px;
-    background:linear-gradient(180deg,var(--ink-2),var(--ink-1));
-    border-bottom:1px solid var(--line);
+  /* ============ header: two rows, so nothing can hide ============ */
+  header{flex:none; background:var(--surface); border-bottom:1px solid var(--line)}
+  .bar1{display:flex; align-items:center; gap:12px; padding:9px 16px}
+  .logo{width:26px;height:26px;border-radius:7px;flex:none;
+        background:linear-gradient(145deg,#FF7A4D,var(--accent));
+        display:flex;align-items:center;justify-content:center;
+        color:#fff;font-weight:800;font-size:14px;
+        box-shadow:0 2px 5px rgba(240,86,45,.3)}
+  .name{font-size:15px;font-weight:680;letter-spacing:-.25px}
+  .tag{font-size:11.5px;color:var(--fg-faint);white-space:nowrap}
+  @media (max-width:640px){.tag{display:none}}
+
+  .live{margin-left:auto;flex:none;display:flex;align-items:center;gap:6px;
+        font-size:11.5px;color:var(--fg-faint);padding:3px 10px;border-radius:20px;
+        background:var(--surface-3);border:1px solid var(--line)}
+  .live .bulb{width:6px;height:6px;border-radius:50%;background:var(--fg-faint)}
+  .live.on{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
+  .live.on .bulb{background:var(--ok);box-shadow:0 0 0 3px rgba(18,161,80,.16)}
+
+  /* wraps instead of clipping - the fix for buttons disappearing */
+  .bar2{display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+        padding:0 16px 10px; border-top:1px solid var(--surface-3)}
+  .bar2 .lbl{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;
+             color:var(--fg-faint);margin-right:3px}
+  .bar2 button{
+    flex:none;display:inline-flex;align-items:center;gap:6px;
+    background:var(--surface);color:var(--fg-dim);border:1px solid var(--line-2);
+    border-radius:7px;padding:5px 11px;font-size:12px;font-weight:500;
+    cursor:pointer;white-space:nowrap;transition:.13s;box-shadow:var(--sh)
   }
-  .brand { display:flex; align-items:baseline; gap:9px; }
-  .brand h1 {
-    margin:0; font-size:15px; font-weight:650; letter-spacing:-.2px;
-    background:linear-gradient(92deg,#fff,var(--accent));
-    -webkit-background-clip:text; background-clip:text; color:transparent;
-  }
-  .brand span { font-size:11.5px; color:var(--fg-faint); letter-spacing:.1px; }
+  .bar2 button:hover{border-color:var(--accent);color:var(--accent);
+                     background:var(--accent-soft)}
+  .bar2 button:active{transform:translateY(1px)}
+  .bar2 button::before{content:"▶";font-size:7.5px;color:var(--accent)}
+  .bar2 button:disabled{opacity:.45;cursor:default}
 
-  .launch { display:flex; gap:6px; align-items:center; margin-left:6px;
-            overflow-x:auto; scrollbar-width:none; }
-  .launch::-webkit-scrollbar { display:none; }
-  .launch button {
-    flex:none; display:inline-flex; align-items:center; gap:6px;
-    background:var(--ink-3); color:var(--fg-dim); border:1px solid var(--line);
-    border-radius:var(--r); padding:5px 11px; font-size:12px; cursor:pointer;
-    white-space:nowrap; transition:.13s;
-  }
-  .launch button:hover { border-color:var(--accent-dim); color:var(--fg); background:#20303f; }
-  .launch button:active { transform:translateY(1px); }
-  .launch button::before { content:"▶"; font-size:8px; color:var(--accent); }
-  .launch button:disabled { opacity:.45; cursor:default; }
+  /* ============ layout ============ */
+  #shell{flex:1;display:flex;min-height:0}
+  #side{width:272px;min-width:180px;max-width:520px;flex:none;background:var(--surface);
+        border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  #vsplit{flex:none;width:5px;cursor:col-resize;position:relative;background:var(--bg)}
+  #vsplit::after{content:"";position:absolute;inset:0 2px;background:transparent;transition:.15s}
+  #vsplit:hover::after,#vsplit.drag::after{background:var(--accent)}
+  #main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  #hsplit{flex:none;height:5px;cursor:row-resize;position:relative;background:var(--bg)}
+  #hsplit::after{content:"";position:absolute;inset:2px 0;background:transparent;transition:.15s}
+  #hsplit:hover::after,#hsplit.drag::after{background:var(--accent)}
 
-  .live { margin-left:auto; flex:none; display:flex; align-items:center; gap:7px;
-          font-size:11.5px; color:var(--fg-faint); padding-left:12px; }
-  .live .bulb { width:7px; height:7px; border-radius:50%; background:var(--fg-faint); }
-  .live.on .bulb { background:var(--st-ok); box-shadow:0 0 0 3px rgba(47,182,115,.16); }
-  .live.on { color:var(--st-ok); }
+  /* ============ runs ============ */
+  .side-head{flex:none;padding:10px 14px;font-size:10.5px;letter-spacing:.9px;
+             text-transform:uppercase;color:var(--fg-faint);
+             border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+  #runs{flex:1;overflow-y:auto;min-height:0}
+  .run{padding:10px 14px;border-bottom:1px solid var(--surface-3);cursor:pointer;
+       display:flex;gap:10px;align-items:flex-start;transition:background .1s}
+  .run:hover{background:var(--surface-2)}
+  .run.sel{background:var(--accent-soft);box-shadow:inset 2.5px 0 0 var(--accent)}
+  .run .dot{width:7px;height:7px;border-radius:50%;margin-top:5px;flex:none}
+  .run .body{min-width:0;flex:1}
+  .run .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;
+           text-overflow:ellipsis}
+  .run .sub{font-size:11px;color:var(--fg-faint);font-family:var(--mono);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .badge{display:inline-block;font-size:9px;padding:0 5px;border-radius:4px;
+         background:var(--accent-soft);border:1px solid var(--accent-line);
+         color:var(--accent);margin-left:5px;vertical-align:1px;
+         letter-spacing:.4px;font-weight:700}
 
-  /* ---------- layout with draggable splitters ---------- */
-  #shell { flex:1; display:flex; min-height:0; }
-  #side { width:280px; min-width:190px; max-width:520px; flex:none;
-          background:var(--ink-1); border-right:1px solid var(--line);
-          display:flex; flex-direction:column; min-height:0; }
-  #vsplit { flex:none; width:5px; cursor:col-resize; background:transparent; position:relative; }
-  #vsplit::after { content:""; position:absolute; inset:0 2px; background:var(--line); transition:.15s; }
-  #vsplit:hover::after, #vsplit.drag::after { background:var(--accent); inset:0 1px; }
+  /* ============ canvas header ============ */
+  .chead{flex:none;display:flex;align-items:center;gap:10px;padding:10px 15px;
+         border-bottom:1px solid var(--line);background:var(--surface);min-height:47px;
+         flex-wrap:wrap}
+  .chead .title{font-size:13.5px;font-weight:660}
+  .chead .meta{font-size:11.5px;color:var(--fg-faint);font-family:var(--mono)}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;
+        letter-spacing:.4px;padding:3px 9px;border-radius:20px;border:1px solid}
+  .pill .d{width:5px;height:5px;border-radius:50%;background:currentColor}
+  .zoomers{margin-left:auto;display:flex;gap:5px;flex:none}
+  .zoomers button{background:var(--surface);border:1px solid var(--line-2);color:var(--fg-dim);
+    width:27px;height:27px;border-radius:6px;cursor:pointer;font-size:14px;
+    display:flex;align-items:center;justify-content:center;transition:.13s;box-shadow:var(--sh)}
+  .zoomers button.wide{width:auto;padding:0 10px;font-size:11.5px;font-weight:600}
+  .zoomers button:hover{border-color:var(--accent);color:var(--accent)}
 
-  #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
-  #hsplit { flex:none; height:5px; cursor:row-resize; position:relative; }
-  #hsplit::after { content:""; position:absolute; inset:2px 0; background:var(--line); transition:.15s; }
-  #hsplit:hover::after, #hsplit.drag::after { background:var(--accent); inset:1px 0; }
+  .err{padding:8px 15px;background:var(--fail-bg);border-bottom:1px solid var(--fail-line);
+       color:#9F2820;font-size:11.5px;font-family:var(--mono)}
 
-  /* ---------- run list ---------- */
-  .side-head { flex:none; padding:9px 13px; font-size:10.5px; letter-spacing:.9px;
-               text-transform:uppercase; color:var(--fg-faint);
-               border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
-  #runs { flex:1; overflow-y:auto; min-height:0; }
-  .run { padding:9px 13px; border-bottom:1px solid var(--line); cursor:pointer;
-         display:flex; gap:9px; align-items:flex-start; transition:background .1s; }
-  .run:hover { background:var(--ink-2); }
-  .run.sel { background:var(--ink-3); box-shadow:inset 2px 0 0 var(--accent); }
-  .run .dot { width:7px; height:7px; border-radius:50%; margin-top:5px; flex:none; }
-  .run .body { min-width:0; flex:1; }
-  .run .nm { font-size:12.5px; font-weight:550; white-space:nowrap;
-             overflow:hidden; text-overflow:ellipsis; }
-  .run .sub { font-size:11px; color:var(--fg-faint); font-family:var(--mono);
-              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
-  .badge { display:inline-block; font-size:9px; padding:0 4px; border-radius:3px;
-           border:1px solid var(--line-2); color:var(--fg-faint); margin-left:4px;
-           vertical-align:1px; letter-spacing:.4px; }
+  #approval{flex:none;margin:12px 15px 0;padding:13px 15px;border-radius:var(--r);
+            background:var(--wait-bg);border:1px solid var(--wait-line);box-shadow:var(--sh)}
+  #approval .q{font-size:13.5px;font-weight:640;margin-bottom:3px}
+  #approval .who{font-size:11px;color:var(--fg-dim);font-family:var(--mono);margin-bottom:10px}
+  #approval .row{display:flex;gap:7px;flex-wrap:wrap}
+  #approval input{font:inherit;font-size:12px;padding:6px 10px;width:190px;border-radius:6px;
+                  background:var(--surface);color:var(--fg);border:1px solid var(--line-2)}
+  #approval button{font-size:12px;padding:6px 15px;border-radius:6px;cursor:pointer;
+                   border:1px solid var(--line-2);background:var(--surface);color:var(--fg);
+                   font-weight:600;transition:.13s;box-shadow:var(--sh)}
+  #approval button.yes:hover{border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+  #approval button.no:hover{border-color:var(--fail);color:var(--fail);background:var(--fail-bg)}
 
-  /* ---------- canvas header ---------- */
-  .canvas-head { flex:none; display:flex; align-items:center; gap:10px;
-                 padding:9px 14px; border-bottom:1px solid var(--line);
-                 background:var(--ink-1); min-height:44px; }
-  .canvas-head .title { font-size:13px; font-weight:600; }
-  .canvas-head .meta { font-size:11.5px; color:var(--fg-faint); font-family:var(--mono); }
-  .pill { display:inline-flex; align-items:center; gap:5px; font-size:10.5px;
-          font-weight:600; letter-spacing:.4px; padding:2px 8px; border-radius:20px;
-          border:1px solid transparent; }
-  .pill .d { width:5px; height:5px; border-radius:50%; background:currentColor; }
-  .zoomers { margin-left:auto; display:flex; gap:4px; flex:none; }
-  .zoomers button {
-    background:var(--ink-3); border:1px solid var(--line); color:var(--fg-dim);
-    width:26px; height:26px; border-radius:5px; cursor:pointer; font-size:13px;
-    display:flex; align-items:center; justify-content:center; transition:.13s;
-  }
-  .zoomers button.wide { width:auto; padding:0 9px; font-size:11px; }
-  .zoomers button:hover { border-color:var(--accent-dim); color:var(--fg); }
+  /* ============ dag ============ */
+  #canvas{flex:1;position:relative;overflow:hidden;min-height:0;cursor:grab;
+    background:radial-gradient(circle at 1px 1px,#DED5CB 1.1px,transparent 0) 0 0/24px 24px,
+               var(--surface-2)}
+  #canvas.panning{cursor:grabbing}
+  #canvas svg{position:absolute;top:0;left:0;width:100%;height:100%}
+  .hint{position:absolute;left:15px;bottom:12px;font-size:10.5px;color:var(--fg-faint);
+        pointer-events:none;font-family:var(--mono);
+        background:rgba(255,255,255,.75);padding:2px 7px;border-radius:5px}
+  .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+         color:var(--fg-faint);font-size:13px}
+  .node text{pointer-events:none}
+  .node .nm{font:640 12.5px var(--sans)}
+  .node .st{font:700 9.5px var(--mono);letter-spacing:.6px}
+  @keyframes breathe{0%,100%{opacity:.9}50%{opacity:.3}}
+  .node.RUNNING .halo,.node.WAITING .halo{animation:breathe 1.3s ease-in-out infinite}
 
-  .err { padding:7px 14px; background:rgba(224,85,97,.1);
-         border-bottom:1px solid rgba(224,85,97,.3); color:#ffb3b9;
-         font-size:11.5px; font-family:var(--mono); }
+  /* ============ log ============ */
+  #log{height:210px;min-height:0;overflow-y:auto;background:var(--surface);
+       padding:8px 0;font-family:var(--mono);font-size:11.5px;
+       border-top:1px solid var(--line)}
+  .ev{display:flex;gap:12px;padding:2px 15px;color:var(--fg-dim)}
+  .ev:hover{background:var(--surface-2)}
+  .ev .n{width:26px;text-align:right;color:var(--fg-faint);flex:none}
+  .ev .t{width:196px;flex:none}
+  .ev .s{width:152px;flex:none;color:var(--fg)}
+  .ev .x{color:var(--fg-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev.hot .t{color:var(--fg);font-weight:700}
+  .ev.bad .t{color:var(--fail);font-weight:700}
+  .ev.undo .t{color:var(--undo);font-weight:700}
 
-  /* ---------- approval ---------- */
-  #approval { flex:none; margin:11px 14px 0; padding:11px 13px; border-radius:var(--r);
-              background:linear-gradient(180deg,rgba(154,123,234,.15),rgba(154,123,234,.06));
-              border:1px solid rgba(154,123,234,.45); }
-  #approval .q { font-size:13px; font-weight:600; margin-bottom:3px; }
-  #approval .who { font-size:11px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:9px; }
-  #approval .row { display:flex; gap:7px; flex-wrap:wrap; }
-  #approval input { font:inherit; font-size:12px; padding:5px 9px; width:190px;
-                    border-radius:5px; background:var(--ink-0); color:var(--fg);
-                    border:1px solid var(--line-2); }
-  #approval button { font-size:12px; padding:5px 14px; border-radius:5px; cursor:pointer;
-                     border:1px solid var(--line-2); background:var(--ink-3); color:var(--fg);
-                     font-weight:550; transition:.13s; }
-  #approval button.yes:hover { border-color:var(--st-ok); background:rgba(47,182,115,.18); }
-  #approval button.no:hover  { border-color:var(--st-fail); background:rgba(224,85,97,.18); }
-
-  /* ---------- dag canvas ---------- */
-  #canvas { flex:1; position:relative; overflow:hidden; min-height:0;
-            background:
-              radial-gradient(circle at 1px 1px, var(--line) 1px, transparent 0) 0 0/22px 22px,
-              var(--ink-0);
-            cursor:grab; }
-  #canvas.panning { cursor:grabbing; }
-  #canvas svg { position:absolute; top:0; left:0; width:100%; height:100%; }
-  .hint { position:absolute; left:14px; bottom:11px; font-size:10.5px;
-          color:var(--fg-faint); pointer-events:none; font-family:var(--mono); }
-  .empty { position:absolute; inset:0; display:flex; align-items:center;
-           justify-content:center; color:var(--fg-faint); font-size:13px; }
-
-  .node text { pointer-events:none; }
-  .node .nm { font:600 12.5px var(--sans); fill:#fff; }
-  .node .st { font:600 9.5px var(--mono); letter-spacing:.5px; }
-  @keyframes breathe { 0%,100%{opacity:1} 50%{opacity:.5} }
-  .node.RUNNING .halo { animation:breathe 1.15s ease-in-out infinite; }
-  .node.WAITING .halo { animation:breathe 2.2s ease-in-out infinite; }
-
-  /* ---------- log ---------- */
-  #log { height:220px; min-height:0; overflow-y:auto; background:var(--ink-1);
-         padding:7px 0; font-family:var(--mono); font-size:11.5px; }
-  .ev { display:flex; gap:10px; padding:1.5px 14px; color:var(--fg-dim); }
-  .ev:hover { background:var(--ink-2); }
-  .ev .n { width:26px; text-align:right; color:var(--fg-faint); flex:none; }
-  .ev .t { width:190px; flex:none; }
-  .ev .s { width:150px; flex:none; color:var(--fg); }
-  .ev .x { color:var(--fg-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ev.hot .t { color:#fff; font-weight:600; }
-  .ev.bad .t { color:#ff9aa2; font-weight:600; }
-  .ev.undo .t { color:#ffbb7d; font-weight:600; }
-
-  ::-webkit-scrollbar { width:9px; height:9px; }
-  ::-webkit-scrollbar-track { background:transparent; }
-  ::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:5px; }
-  ::-webkit-scrollbar-thumb:hover { background:#3d4d63; }
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:5px;
+                            border:2px solid var(--surface)}
+  ::-webkit-scrollbar-thumb:hover{background:#C4B8A9}
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <div class="brand"><h1>Cascade</h1><span>workflow engine</span></div>
-  <div class="launch" id="launch"></div>
-  <div class="live" id="live"><span class="bulb"></span><span id="liveTxt">idle</span></div>
-</div>
+<header>
+  <div class="bar1">
+    <div class="logo">C</div>
+    <span class="name">Cascade</span>
+    <span class="tag">durable workflow engine · infrastructure that repairs itself</span>
+    <span class="live" id="live"><span class="bulb"></span><span id="liveTxt">idle</span></span>
+  </div>
+  <div class="bar2" id="launch"><span class="lbl">Run</span></div>
+</header>
 
 <div id="shell">
   <aside id="side">
@@ -191,16 +190,15 @@
     <div id="runs"></div>
   </aside>
   <div id="vsplit"></div>
-
   <div id="main">
-    <div class="canvas-head">
+    <div class="chead">
       <span class="title" id="ttl">No run selected</span>
       <span class="pill" id="pill" hidden><span class="d"></span><span></span></span>
       <span class="meta" id="mta"></span>
       <div class="zoomers">
         <button id="zout" title="Zoom out">−</button>
         <button id="zin" title="Zoom in">+</button>
-        <button id="zfit" class="wide" title="Fit to view">Fit</button>
+        <button id="zfit" class="wide">Fit</button>
       </div>
     </div>
     <div class="err" id="err" hidden></div>
@@ -216,135 +214,117 @@
 </div>
 
 <script>
-const ST = {
-  PENDING:'--st-pending', SCHEDULED:'--st-scheduled', RUNNING:'--st-running',
-  SUCCEEDED:'--st-ok', FAILED:'--st-fail', WAITING:'--st-wait',
-  COMPENSATED:'--st-undo', RETRY_SCHEDULED:'--st-running',
+const TONE = {
+  PENDING:['--pend','--pend-bg','--pend-line'],
+  SCHEDULED:['--fg-dim','--surface-3','--line-2'],
+  RUNNING:['--run','--run-bg','--run-line'],
+  SUCCEEDED:['--ok','--ok-bg','--ok-line'],
+  FAILED:['--fail','--fail-bg','--fail-line'],
+  WAITING:['--wait','--wait-bg','--wait-line'],
+  COMPENSATED:['--undo','--undo-bg','--undo-line'],
+  RETRY_SCHEDULED:['--run','--run-bg','--run-line'],
 };
-const RUNST = {
-  PENDING:'--st-pending', RUNNING:'--st-running', WAITING:'--st-wait',
-  COMPENSATING:'--st-undo', SUCCEEDED:'--st-ok', FAILED:'--st-fail',
-  CANCELLED:'--st-pending',
+const RUNTONE = {
+  PENDING:'--pend', RUNNING:'--run', WAITING:'--wait', COMPENSATING:'--undo',
+  SUCCEEDED:'--ok', FAILED:'--fail', CANCELLED:'--pend',
 };
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const $  = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let selected=null, source=null, spec=null, ctx=null;
 let view={x:0,y:0,k:1}, bounds=null;
 
-/* ================= splitters ================= */
-function persist(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
-function restore(k,d){ try{ return localStorage.getItem(k) ?? d; }catch(e){ return d; } }
+/* ---------- splitters ---------- */
+const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+const load=(k,d)=>{try{return localStorage.getItem(k)??d}catch(e){return d}};
+$('side').style.width = load('cascade.side','272')+'px';
+$('log').style.height = load('cascade.log','210')+'px';
 
-$('side').style.width = restore('cascade.side','280') + 'px';
-$('log').style.height = restore('cascade.log','220') + 'px';
-
-function drag(handle, onMove){
-  handle.addEventListener('mousedown', e => {
-    e.preventDefault(); handle.classList.add('drag');
-    document.body.style.userSelect='none';
-    const move = ev => onMove(ev);
-    const up = () => {
-      handle.classList.remove('drag'); document.body.style.userSelect='';
-      window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
-      fit();
-    };
-    window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+function drag(h,onMove){
+  h.addEventListener('mousedown',e=>{
+    e.preventDefault(); h.classList.add('drag'); document.body.style.userSelect='none';
+    const m=ev=>onMove(ev);
+    const u=()=>{h.classList.remove('drag');document.body.style.userSelect='';
+      removeEventListener('mousemove',m);removeEventListener('mouseup',u);fit();};
+    addEventListener('mousemove',m); addEventListener('mouseup',u);
   });
 }
-drag($('vsplit'), e => {
-  const w = Math.max(190, Math.min(520, e.clientX));
-  $('side').style.width = w+'px'; persist('cascade.side', w);
-});
-drag($('hsplit'), e => {
-  const rect = $('main').getBoundingClientRect();
-  const h = Math.max(80, Math.min(rect.height-140, rect.bottom - e.clientY));
-  $('log').style.height = h+'px'; persist('cascade.log', Math.round(h));
-});
+drag($('vsplit'),e=>{const w=Math.max(180,Math.min(520,e.clientX));
+  $('side').style.width=w+'px'; save('cascade.side',w);});
+drag($('hsplit'),e=>{const r=$('main').getBoundingClientRect();
+  const h=Math.max(70,Math.min(r.height-150,r.bottom-e.clientY));
+  $('log').style.height=h+'px'; save('cascade.log',Math.round(h));});
 
-/* ================= pan + zoom ================= */
+/* ---------- pan / zoom ---------- */
 const canvas=$('canvas'), stage=$('stage');
-function applyView(){ stage.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
+const applyView=()=>stage.setAttribute('transform',
+  `translate(${view.x},${view.y}) scale(${view.k})`);
 
 function fit(){
   if(!bounds) return;
-  const r = canvas.getBoundingClientRect();
+  const r=canvas.getBoundingClientRect();
   if(r.width<40||r.height<40) return;
-  const pad = 44;
-  const k = Math.min((r.width-pad*2)/bounds.w, (r.height-pad*2)/bounds.h, 1.35);
-  view.k = Math.max(k, .18);
-  view.x = (r.width  - bounds.w*view.k)/2 - bounds.x*view.k;
-  view.y = (r.height - bounds.h*view.k)/2 - bounds.y*view.k;
+  const pad=46;
+  view.k=Math.max(Math.min((r.width-pad*2)/bounds.w,(r.height-pad*2)/bounds.h,1.3),.18);
+  view.x=(r.width-bounds.w*view.k)/2;
+  view.y=(r.height-bounds.h*view.k)/2;
   applyView();
 }
-function zoomBy(f, cx, cy){
-  const r = canvas.getBoundingClientRect();
-  cx = cx ?? r.width/2; cy = cy ?? r.height/2;
-  const k2 = Math.max(.15, Math.min(3, view.k*f));
-  view.x = cx - (cx-view.x)*(k2/view.k);
-  view.y = cy - (cy-view.y)*(k2/view.k);
-  view.k = k2; applyView();
+function zoomBy(f,cx,cy){
+  const r=canvas.getBoundingClientRect();
+  cx=cx??r.width/2; cy=cy??r.height/2;
+  const k2=Math.max(.15,Math.min(3,view.k*f));
+  view.x=cx-(cx-view.x)*(k2/view.k); view.y=cy-(cy-view.y)*(k2/view.k);
+  view.k=k2; applyView();
 }
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  const r = canvas.getBoundingClientRect();
-  zoomBy(e.deltaY<0?1.13:1/1.13, e.clientX-r.left, e.clientY-r.top);
-}, {passive:false});
+canvas.addEventListener('wheel',e=>{e.preventDefault();
+  const r=canvas.getBoundingClientRect();
+  zoomBy(e.deltaY<0?1.13:1/1.13,e.clientX-r.left,e.clientY-r.top);},{passive:false});
+let panning=false,from=null;
+canvas.addEventListener('mousedown',e=>{panning=true;
+  from={x:e.clientX-view.x,y:e.clientY-view.y}; canvas.classList.add('panning');});
+addEventListener('mousemove',e=>{if(!panning)return;
+  view.x=e.clientX-from.x; view.y=e.clientY-from.y; applyView();});
+addEventListener('mouseup',()=>{panning=false;canvas.classList.remove('panning')});
+canvas.addEventListener('dblclick',fit);
+$('zin').onclick=()=>zoomBy(1.25); $('zout').onclick=()=>zoomBy(1/1.25); $('zfit').onclick=fit;
+addEventListener('resize',fit);
 
-let panning=false, from=null;
-canvas.addEventListener('mousedown', e => {
-  panning=true; from={x:e.clientX-view.x, y:e.clientY-view.y}; canvas.classList.add('panning');
-});
-window.addEventListener('mousemove', e => {
-  if(!panning) return;
-  view.x=e.clientX-from.x; view.y=e.clientY-from.y; applyView();
-});
-window.addEventListener('mouseup', ()=>{ panning=false; canvas.classList.remove('panning'); });
-canvas.addEventListener('dblclick', fit);
-$('zin').onclick  = ()=>zoomBy(1.25);
-$('zout').onclick = ()=>zoomBy(1/1.25);
-$('zfit').onclick = fit;
-window.addEventListener('resize', fit);
-
-/* ================= launch bar ================= */
+/* ---------- launch ---------- */
 async function loadWorkflows(){
-  const d = await (await fetch('/api/workflows/')).json();
-  const box=$('launch'); box.innerHTML='';
-  (d.results||d).forEach(w => {
+  const d=await (await fetch('/api/workflows/')).json();
+  const box=$('launch');
+  box.querySelectorAll('button').forEach(b=>b.remove());
+  (d.results||d).forEach(w=>{
     const b=document.createElement('button');
-    b.textContent=w.name;
-    b.onclick=()=>launch(w.name,b);
-    box.appendChild(b);
+    b.textContent=w.name; b.onclick=()=>launch(w.name,b); box.appendChild(b);
   });
 }
-async function launch(name, btn){
-  if(btn){ btn.disabled=true; setTimeout(()=>btn.disabled=false,700); }
+async function launch(name,btn){
+  if(btn){btn.disabled=true;setTimeout(()=>btn.disabled=false,700);}
   const body={workflow:name};
   if(name==='rolling_cluster_upgrade'){
     const n='node-'+(1+Math.floor(Math.random()*5));
     body.input={node:n}; body.entity_ref='node:'+n;
   }
-  const run = await (await fetch('/api/runs/',{
-    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
-  })).json();
-  await loadRuns();
-  await select(run.id);
+  const run=await (await fetch('/api/runs/',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  await loadRuns(); await select(run.id);
 }
 
-/* ================= run list ================= */
+/* ---------- runs ---------- */
 async function loadRuns(){
-  const d = await (await fetch('/api/runs/?limit=60')).json();
-  const list = d.results||d;
-  $('runCount').textContent = d.count ?? list.length;
+  const d=await (await fetch('/api/runs/?limit=60')).json();
+  const list=d.results||d;
+  $('runCount').textContent=d.count??list.length;
   const box=$('runs'); box.innerHTML='';
-  list.forEach(r => {
+  list.forEach(r=>{
     const el=document.createElement('div');
     el.className='run'+(r.id===selected?' sel':'');
     el.onclick=()=>select(r.id);
-    const auto = r.trigger_source && r.trigger_source.startsWith('trigger:');
-    el.innerHTML =
-      `<span class="dot" style="background:${css(RUNST[r.status]||'--st-pending')}"></span>`+
+    const auto=r.trigger_source&&r.trigger_source.startsWith('trigger:');
+    el.innerHTML=`<span class="dot" style="background:${css(RUNTONE[r.status]||'--pend')}"></span>`+
       `<span class="body"><span class="nm">${esc(r.workflow)}</span>`+
       `<div class="sub">${esc(r.status)}${r.entity_ref?' · '+esc(r.entity_ref):''}`+
       `${auto?'<span class="badge">AUTO</span>':''}</div></span>`;
@@ -352,166 +332,138 @@ async function loadRuns(){
   });
 }
 
-/* ================= dag ================= */
+/* ---------- dag ---------- */
 function layout(steps){
   const by={}; steps.forEach(s=>by[s.id]=s);
   const lvl={};
   const depth=(id,seen=new Set())=>{
-    if(lvl[id]!==undefined) return lvl[id];
-    if(seen.has(id)) return 0;
-    seen.add(id);
-    let n=by[id].needs||[]; if(typeof n==='string') n=[n];
-    lvl[id]=n.length?Math.max(...n.map(x=>depth(x,seen)))+1:0;
-    return lvl[id];
+    if(lvl[id]!==undefined)return lvl[id];
+    if(seen.has(id))return 0; seen.add(id);
+    let n=by[id].needs||[]; if(typeof n==='string')n=[n];
+    lvl[id]=n.length?Math.max(...n.map(x=>depth(x,seen)))+1:0; return lvl[id];
   };
   steps.forEach(s=>depth(s.id));
   const cols={}; steps.forEach(s=>(cols[lvl[s.id]]=cols[lvl[s.id]]||[]).push(s.id));
-  const W=176,H=58,GX=64,GY=26, pos={};
-  const tallest=Math.max(...Object.values(cols).map(c=>c.length));
+  const W=178,H=60,GX=66,GY=26,pos={};
+  const tall=Math.max(...Object.values(cols).map(c=>c.length));
   Object.keys(cols).forEach(l=>{
-    const col=cols[l];
-    const offset=((tallest-col.length)*(H+GY))/2;      // vertically centre short columns
-    col.forEach((id,i)=>{ pos[id]={x:l*(W+GX), y:offset+i*(H+GY), w:W, h:H}; });
+    const col=cols[l], off=((tall-col.length)*(H+GY))/2;
+    col.forEach((id,i)=>pos[id]={x:l*(W+GX),y:off+i*(H+GY),w:W,h:H});
   });
-  return {pos, w:(Math.max(...Object.keys(cols).map(Number))+1)*(W+GX)-GX, h:tallest*(H+GY)-GY};
+  return {pos,w:(Math.max(...Object.keys(cols).map(Number))+1)*(W+GX)-GX,h:tall*(H+GY)-GY};
 }
-
 function renderDag(){
-  if(!spec){ stage.innerHTML=''; bounds=null; $('empty').hidden=false; return; }
-  $('empty').hidden = true;
-  const steps=spec.steps||[];
-  const {pos,w,h}=layout(steps);
-  bounds={x:0,y:0,w,h};
+  if(!spec){stage.innerHTML='';bounds=null;$('empty').hidden=false;return;}
+  $('empty').hidden=true;
+  const steps=spec.steps||[], {pos,w,h}=layout(steps);
+  bounds={w,h};
   const state=(ctx&&ctx.steps)||{};
-
   let edges='',nodes='';
   steps.forEach(s=>{
-    let n=s.needs||[]; if(typeof n==='string') n=[n];
+    let n=s.needs||[]; if(typeof n==='string')n=[n];
     n.forEach(p=>{
-      const a=pos[p],b=pos[s.id]; if(!a||!b) return;
-      const x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2, m=(x1+x2)/2;
+      const a=pos[p],b=pos[s.id]; if(!a||!b)return;
+      const x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2,m=(x1+x2)/2;
       const done=(state[p]||{}).status==='SUCCEEDED';
       edges+=`<path d="M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}" fill="none"
-        stroke="${done?css('--st-ok'):css('--line-2')}" stroke-width="${done?2.2:1.6}"
-        opacity="${done?.85:.55}"/>`;
+        stroke="${done?css('--ok'):css('--line-2')}" stroke-width="${done?2.2:1.6}"
+        opacity="${done?.8:.85}"/>`;
     });
   });
-
   steps.forEach(s=>{
     const p=pos[s.id], sl=state[s.id]||{}, st=sl.status||'PENDING';
-    const col=css(ST[st]||'--st-pending');
-    const tries=sl.attempts>1?` ·${sl.attempts}`:'';
+    const [fg,bg,ln]=(TONE[st]||TONE.PENDING).map(css);
+    const tries=sl.attempts>1?` · try ${sl.attempts}`:'';
     nodes+=`<g class="node ${st}">
-      <rect class="halo" x="${p.x-3}" y="${p.y-3}" width="${p.w+6}" height="${p.h+6}" rx="11"
-            fill="${col}" opacity="${st==='PENDING'?0:.2}"/>
-      <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="9"
-            fill="${col}" fill-opacity="${st==='PENDING'?.22:.95}"
-            stroke="${col}" stroke-width="1.4"/>
-      <text class="nm" x="${p.x+14}" y="${p.y+25}"
-            fill="${st==='PENDING'?css('--fg-dim'):'#0b1017'}">${esc(s.id)}</text>
-      <text class="st" x="${p.x+14}" y="${p.y+42}"
-            fill="${st==='PENDING'?css('--fg-faint'):'rgba(8,14,20,.72)'}">${esc(st+tries)}</text>
+      <rect class="halo" x="${p.x-4}" y="${p.y-4}" width="${p.w+8}" height="${p.h+8}" rx="13"
+            fill="${fg}" opacity="${st==='RUNNING'||st==='WAITING'?.18:0}"/>
+      <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="10"
+            fill="${bg}" stroke="${ln}" stroke-width="1.5"/>
+      <rect x="${p.x}" y="${p.y}" width="3.5" height="${p.h}" rx="2" fill="${fg}"/>
+      <text class="nm" x="${p.x+15}" y="${p.y+26}" fill="${css('--fg')}">${esc(s.id)}</text>
+      <text class="st" x="${p.x+15}" y="${p.y+43}" fill="${fg}">${esc(st+tries)}</text>
     </g>`;
   });
-
-  stage.innerHTML = edges + nodes;
+  stage.innerHTML=edges+nodes;
 }
 
-/* ================= selection + stream ================= */
+/* ---------- select + stream ---------- */
 async function select(id){
   selected=id;
-  if(source){ source.close(); source=null; }
+  if(source){source.close();source=null;}
   $('log').innerHTML='';
-
-  const d = await (await fetch(`/api/runs/${id}/`)).json();
+  const d=await (await fetch(`/api/runs/${id}/`)).json();
   spec=d.spec; ctx=d.context;
-
-  $('ttl').textContent = d.workflow;
+  $('ttl').textContent=d.workflow;
   const p=$('pill'); p.hidden=false;
-  const c=css(RUNST[d.status]||'--st-pending');
-  p.style.color=c; p.style.borderColor=c; p.style.background=c+'22';
+  const c=css(RUNTONE[d.status]||'--pend');
+  p.style.color=c; p.style.borderColor=c+'66'; p.style.background=c+'18';
   p.lastElementChild.textContent=d.status;
-  $('mta').textContent = `v${d.workflow_version}` +
-    (d.entity_ref?` · ${d.entity_ref}`:'') +
-    ` · ${d.trigger_source.startsWith('trigger:')?'auto-triggered':'manual'}`;
-  $('err').hidden = !d.error; $('err').textContent = d.error||'';
-
+  $('mta').textContent=`v${d.workflow_version}`+(d.entity_ref?` · ${d.entity_ref}`:'')+
+    ` · ${d.trigger_source.startsWith('trigger:')?'auto-triggered by the graph':'manual'}`;
+  $('err').hidden=!d.error; $('err').textContent=d.error||'';
   renderDag(); fit();
   await renderApprovals(id);
   d.events.forEach(addEvent);
   await loadRuns();
-
-  if(['SUCCEEDED','FAILED','CANCELLED'].includes(d.status)){ setLive(false); return; }
-  if(d.status==='WAITING' && !$('approval').hidden){ setLive(false); return; }
-  openStream(id, d.last_seq);
+  if(['SUCCEEDED','FAILED','CANCELLED'].includes(d.status)){setLive(false);return;}
+  if(d.status==='WAITING'&&!$('approval').hidden){setLive(false);return;}
+  openStream(id,d.last_seq);
 }
-
-function openStream(id, since){
+function openStream(id,since){
   setLive(true);
   source=new EventSource(`/api/runs/${id}/stream/?since=${since||0}`);
-  source.addEventListener('run_event', async e => {
+  source.addEventListener('run_event',async e=>{
     addEvent(JSON.parse(e.data));
     const d=await (await fetch(`/api/runs/${id}/`)).json();
     ctx=d.context; renderDag();
   });
-  source.addEventListener('status', loadRuns);
-  source.addEventListener('done', async () => {
-    source.close(); source=null; setLive(false); await select(id);
-  });
+  source.addEventListener('status',loadRuns);
+  source.addEventListener('done',async()=>{source.close();source=null;setLive(false);await select(id);});
   source.onerror=()=>setLive(false);
 }
-function setLive(on){
-  $('live').className='live'+(on?' on':'');
-  $('liveTxt').textContent=on?'streaming':'idle';
-}
+function setLive(on){$('live').className='live'+(on?' on':'');
+  $('liveTxt').textContent=on?'streaming':'idle';}
 
-/* ================= approvals ================= */
+/* ---------- approvals ---------- */
 async function renderApprovals(id){
   const box=$('approval');
   const {pending}=await (await fetch(`/api/runs/${id}/approvals/`)).json();
-  if(!pending||!pending.length){ box.hidden=true; box.innerHTML=''; return; }
-  const a=pending[0];
-  box.hidden=false;
-  box.innerHTML =
-    `<div class="q">${esc(a.prompt)}</div>`+
+  if(!pending||!pending.length){box.hidden=true;box.innerHTML='';return;}
+  const a=pending[0]; box.hidden=false;
+  box.innerHTML=`<div class="q">${esc(a.prompt)}</div>`+
     `<div class="who">${esc(a.step_id)} · ${esc((a.approvers||[]).join(', ')||'anyone')} · `+
-    `${a.deadline?'deadline '+esc(a.deadline.slice(11,19)):'no deadline'}</div>`+
+    `${a.deadline?'deadline '+esc(a.deadline.slice(11,19)):'no deadline — waits indefinitely'}</div>`+
     `<div class="row"><input id="actor" placeholder="your name" value="ops-oncall">`+
     `<button class="yes" id="yes">Approve</button><button class="no" id="no">Deny</button></div>`;
   $('yes').onclick=()=>decide(id,a.step_id,'approve');
-  $('no').onclick =()=>decide(id,a.step_id,'deny');
+  $('no').onclick=()=>decide(id,a.step_id,'deny');
 }
-async function decide(id, step_id, decision){
+async function decide(id,step_id,decision){
   const actor=($('actor')||{}).value||'anonymous';
-  await fetch(`/api/runs/${id}/approve/`,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({step_id,decision,actor})
-  });
+  await fetch(`/api/runs/${id}/approve/`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({step_id,decision,actor})});
   await select(id);
 }
 
-/* ================= log ================= */
+/* ---------- log ---------- */
 function addEvent(ev){
-  const p=ev.payload||{};
-  let note='';
-  if(p.error) note=String(p.error).slice(0,150);
-  else if(p.resume_at) note='until '+String(p.resume_at).slice(11,19);
-  else if(p.delay_seconds!==undefined) note=`retry in ${p.delay_seconds}s`;
-  else if(p.reason) note=p.reason+(p.dead_worker?' · '+p.dead_worker.slice(0,12):'');
-  else if(p.prompt) note=p.prompt;
-  else if(p.actor) note='by '+p.actor;
-
+  const p=ev.payload||{}; let note='';
+  if(p.error)note=String(p.error).slice(0,150);
+  else if(p.resume_at)note='until '+String(p.resume_at).slice(11,19);
+  else if(p.delay_seconds!==undefined)note=`retry in ${p.delay_seconds}s`;
+  else if(p.reason)note=p.reason+(p.dead_worker?' · '+p.dead_worker.slice(0,12):'');
+  else if(p.prompt)note=p.prompt;
+  else if(p.actor)note='by '+p.actor;
   const d=document.createElement('div');
   d.className='ev'+(/FAILED/.test(ev.type)?' bad':/COMPENSAT/.test(ev.type)?' undo':
-                    /TIMER|APPROVAL|RUN_/.test(ev.type)?' hot':'');
+    /TIMER|APPROVAL|RUN_/.test(ev.type)?' hot':'');
   d.innerHTML=`<span class="n">${ev.seq}</span><span class="t">${esc(ev.type)}</span>`+
-              `<span class="s">${esc(ev.step_id)}</span><span class="x">${esc(note)}</span>`;
+    `<span class="s">${esc(ev.step_id)}</span><span class="x">${esc(note)}</span>`;
   const box=$('log'); box.appendChild(d); box.scrollTop=box.scrollHeight;
 }
 
-loadWorkflows();
-loadRuns();
-setInterval(loadRuns, 3000);
+loadWorkflows(); loadRuns(); setInterval(loadRuns,3000);
 </script>
 </body>
 </html>
