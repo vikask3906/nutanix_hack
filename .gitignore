@@ -37,3 +37,9 @@ node_modules/
 
 # Logs
 *.log
+
+# scratch
+*.tmp
+randperson.txt
+approvalrun.txt
+waitrun.txt
