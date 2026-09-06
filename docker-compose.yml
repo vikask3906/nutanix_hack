@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cascade
+      POSTGRES_USER: cascade
+      POSTGRES_PASSWORD: cascade
+    # 5433 on the host: a native Postgres already owns 5432 on this machine.
+    # Containers still talk to each other on db:5432 internally.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cascade -d cascade"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: .
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    environment: &env
+      POSTGRES_DB: cascade
+      POSTGRES_USER: cascade
+      POSTGRES_PASSWORD: cascade
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_DEBUG: "1"
+      DJANGO_SECRET_KEY: dev-only-not-a-real-secret
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  # Scaled with:  docker compose up --scale worker=3
+  # Stub until Block 2 — it starts, reports its identity, and idles.
+  worker:
+    build: .
+    command: python manage.py run_worker
+    environment: *env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+volumes:
+  pgdata:
