@@ -1,4 +1,4 @@
-"""The dispatcher: entity changes become workflow runs.
+﻿"""The dispatcher: entity changes become workflow runs.
 
 This is the piece that turns Cascade from a workflow engine into a platform.
 Without it, someone has to notice a thing happened and POST a run. With it, the
@@ -18,6 +18,7 @@ import logging
 
 from django.db import transaction
 
+from core.tenancy import tenant_context
 from engine.expressions import ExpressionError, render
 from engine.service import start_run
 from graph.models import EntityChange, Trigger
@@ -31,7 +32,7 @@ def dispatch_one():
     """Process a single unprocessed change. Returns (change, runs) or None."""
     with transaction.atomic():
         change = (
-            EntityChange.objects.select_for_update(skip_locked=True)
+            EntityChange.all_tenants.select_for_update(skip_locked=True)
             .select_related("entity")
             .filter(processed_at__isnull=True)
             .order_by("id")
@@ -44,13 +45,29 @@ def dispatch_one():
         context = change_context(change)
         started = []
 
-        triggers = Trigger.objects.select_related("definition").filter(
+        triggers = Trigger.all_tenants.select_related("definition").filter(
             tenant_id=change.tenant_id,
             entity_type=change.entity_type,
             enabled=True,
         )
 
-        for trigger in triggers:
+        # The claim spans tenants - one shared outbox - but everything the
+        # triggers touch belongs to this change's tenant, so scope it.
+        with tenant_context(change.tenant):
+            started = _fire_triggers(change, triggers, context)
+
+        from django.utils import timezone
+
+        change.processed_at = timezone.now()
+        change.save(update_fields=["processed_at"])
+
+    return change, started
+
+
+def _fire_triggers(change, triggers, context):
+    started = []
+
+    for trigger in triggers:
             try:
                 if not matches(trigger.predicate, context):
                     continue
@@ -79,15 +96,10 @@ def dispatch_one():
                 trigger.name, change.entity.ref, run.id,
             )
 
-        # Marked processed inside the same transaction that started the runs.
-        # If this transaction rolls back, the change stays unprocessed and is
-        # retried - at-least-once, matching the rest of the system.
-        from django.utils import timezone
-
-        change.processed_at = timezone.now()
-        change.save(update_fields=["processed_at"])
-
-    return change, started
+    # The caller marks the change processed inside the same transaction that
+    # started these runs. If it rolls back, the change stays unprocessed and is
+    # retried - at-least-once, matching the rest of the system.
+    return started
 
 
 def dispatch_pending(limit=None):

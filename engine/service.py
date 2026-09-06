@@ -1,4 +1,4 @@
-"""Transactional operations against the engine's tables.
+﻿"""Transactional operations against the engine's tables.
 
 Everything that writes to Postgres lives here. The worker loop and the API both
 call into this module, so the concurrency rules are stated once.
@@ -25,6 +25,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from core.models import Tenant
+from core.tenancy import tenant_context
 from engine.models import (
     EventType,
     Run,
@@ -77,7 +78,7 @@ def create_definition(tenant, spec, description=""):
 
     with transaction.atomic():
         latest = (
-            WorkflowDef.objects.filter(tenant=tenant, name=spec["name"])
+            WorkflowDef.all_tenants.filter(tenant=tenant, name=spec["name"])
             .order_by("-version")
             .first()
         )
@@ -86,7 +87,7 @@ def create_definition(tenant, spec, description=""):
         stored = dict(spec)
         stored["version"] = version
 
-        return WorkflowDef.objects.create(
+        return WorkflowDef.all_tenants.create(
             tenant=tenant,
             name=spec["name"],
             version=version,
@@ -116,7 +117,7 @@ def append_event(run, event_type, step_id="", payload=None):
 
         try:
             with transaction.atomic():
-                event = RunEvent.objects.create(
+                event = RunEvent.all_tenants.create(
                     tenant_id=run.tenant_id,
                     run=run,
                     seq=seq,
@@ -124,7 +125,7 @@ def append_event(run, event_type, step_id="", payload=None):
                     step_id=step_id or "",
                     payload=payload or {},
                 )
-                Run.objects.filter(pk=run.pk).update(last_seq=seq)
+                Run.all_tenants.filter(pk=run.pk).update(last_seq=seq)
         except IntegrityError:
             # Another worker claimed this sequence number. Re-read and retry.
             continue
@@ -171,7 +172,7 @@ def enqueue_step(run, step_id, kind=TaskKind.EXECUTE, attempt=1, run_after=None)
 
     try:
         with transaction.atomic():
-            return Task.objects.create(
+            return Task.all_tenants.create(
                 tenant_id=run.tenant_id,
                 run=run,
                 step_id=step_id,
@@ -195,7 +196,7 @@ def next_attempt(run, step_id, kind=TaskKind.EXECUTE):
     that row's idempotency key, ``enqueue_step`` would return None, and the
     approved step would silently never be queued.
     """
-    latest = Task.objects.filter(run=run, step_id=step_id, kind=kind).aggregate(
+    latest = Task.all_tenants.filter(run=run, step_id=step_id, kind=kind).aggregate(
         highest=Max("attempt")
     )["highest"]
     return (latest or 0) + 1
@@ -226,8 +227,11 @@ def claim_task(worker_id, now=None):
     now = now or timezone.now()
 
     with transaction.atomic():
+        # all_tenants deliberately: a worker takes whatever work is due, for
+        # anyone. It enters that task's tenant context before touching anything
+        # else, so everything downstream stays scoped.
         task = (
-            Task.objects.select_for_update(skip_locked=True)
+            Task.all_tenants.select_for_update(skip_locked=True)
             .filter(status=TaskStatus.READY, run_after__lte=now)
             .order_by("run_after")
             .first()
@@ -260,7 +264,7 @@ def renew_lease(task, worker_id, now=None):
     """
     now = now or timezone.now()
 
-    updated = Task.objects.filter(
+    updated = Task.all_tenants.filter(
         pk=task.pk, lease_owner=worker_id, status=TaskStatus.LEASED
     ).update(lease_expires_at=now + timedelta(seconds=settings.TASK_LEASE_SECONDS))
 
@@ -280,7 +284,7 @@ def finish_task_if_owned(task, worker_id):
     Losing the race here is not an error. It means the system correctly decided
     we were gone, and the right response is to discard our work silently.
     """
-    updated = Task.objects.filter(
+    updated = Task.all_tenants.filter(
         pk=task.pk, lease_owner=worker_id, status=TaskStatus.LEASED
     ).update(status=TaskStatus.DONE, lease_owner="", lease_expires_at=None)
 
@@ -516,8 +520,9 @@ def reap_expired_leases(now=None):
 
     while True:
         with transaction.atomic():
+            # all_tenants: the reaper does not care whose lease expired.
             task = (
-                Task.objects.select_for_update(skip_locked=True)
+                Task.all_tenants.select_for_update(skip_locked=True)
                 .filter(status=TaskStatus.LEASED, lease_expires_at__lt=now)
                 .order_by("lease_expires_at")
                 .first()
@@ -536,7 +541,8 @@ def reap_expired_leases(now=None):
                 task.lease_owner = ""
                 task.lease_expires_at = None
                 task.save(update_fields=["status", "lease_owner", "lease_expires_at"])
-                _fail_poisoned_step(task, dead_owner)
+                with tenant_context(task.tenant):
+                    _fail_poisoned_step(task, dead_owner)
                 recovered.append((task, "poisoned"))
                 continue
 
@@ -560,16 +566,18 @@ def reap_expired_leases(now=None):
             task.run_id, task.step_id, dead_owner or "?", next_attempt,
         )
 
-        append_event(
-            task.run,
-            EventType.STEP_RETRY_SCHEDULED,
-            task.step_id,
-            {
-                "reason": "lease expired",
-                "dead_worker": dead_owner,
-                "next_attempt": next_attempt,
-            },
-        )
+        # The sweep spans tenants; the event we write belongs to one.
+        with tenant_context(task.tenant):
+            append_event(
+                task.run,
+                EventType.STEP_RETRY_SCHEDULED,
+                task.step_id,
+                {
+                    "reason": "lease expired",
+                    "dead_worker": dead_owner,
+                    "next_attempt": next_attempt,
+                },
+            )
         recovered.append((task, "recovered"))
 
     return recovered
@@ -604,7 +612,7 @@ def start_run(definition, run_input=None, entity_ref="", trigger_source="api"):
     milliseconds.
     """
     with transaction.atomic():
-        run = Run.objects.create(
+        run = Run.all_tenants.create(
             tenant=definition.tenant,
             definition=definition,
             status=RunStatus.RUNNING,

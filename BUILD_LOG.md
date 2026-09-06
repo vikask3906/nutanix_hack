@@ -18,7 +18,7 @@ block is done. Don't move on until it's true.
 | 6 | Entity graph, outbox, triggers | done |
 | 7 | SSE and the live DAG UI | done |
 | 8 | Human approval steps | done |
-| 9 | Multi-tenancy | next |
+| 9 | Multi-tenancy | done |
 
 ---
 
@@ -757,4 +757,98 @@ Guards: double-approving returns 409; approving a step that is not awaiting appr
 returns 409.
 
 133 unit tests pass with no database.
+
+
+---
+
+## Block 9 — Multi-tenancy
+
+Closes the last gap, and the most Rippling-shaped one: one database serving many
+companies, where a forgotten filter is a loud error rather than one customer reading
+another's payroll.
+
+### What was added
+
+- **`core/tenancy.py`** — a `ContextVar` holding the current tenant, plus
+  `TenantScopedManager`.
+- **`core/middleware.py`** — resolves the tenant per request from `X-Tenant` or the
+  subdomain.
+- Every scoped model now has `objects` (scoped) and `all_tenants` (unscoped), with
+  `base_manager_name = "all_tenants"`.
+- `manage.py seed_tenant` — a second tenant with deliberately colliding names.
+
+### Why it is shaped this way
+
+**The scoped manager is the DEFAULT.** This is the whole point. Making `objects` safe and
+`all_tenants` explicit means a forgotten filter raises `NoTenantContext` instead of
+silently returning another customer's rows — a bug class that does not show up in
+testing, only in an incident report.
+
+**Exactly four places query across tenants, and each is deliberate:**
+
+| Site | Why |
+|---|---|
+| `claim_task` | a worker takes whatever work is due, for anyone |
+| `reap_expired_leases` | the reaper does not care whose lease expired |
+| `dispatch_one` | one shared outbox |
+| the admin | an operator is explicitly looking across tenants |
+
+Each enters the row's tenant context immediately, so everything downstream is scoped
+again. Because they are the only uses of `all_tenants`, a reviewer can grep for the
+escape hatch and audit every one in a minute.
+
+**The context is reset, not cleared.** A worker loops over tasks belonging to many
+tenants; leaking one iteration's tenant into the next is the precise bug this design
+exists to prevent. `tenant_context` restores whatever was set before.
+
+**Foreign-key traversal must NOT be scoped.** Django uses `_base_manager` for it, so
+every scoped model sets `base_manager_name = "all_tenants"`. Without that, a worker
+holding a task could not load the task's own run — the scoped manager would refuse
+before the tenant context was even entered.
+
+**Reverse relations DO go through the scoped manager.** `run.events.all()` is scoped,
+which is why the dispatcher, the reaper and the seed commands all had to enter a context
+explicitly. That is the design working, and it caught three call sites that would
+otherwise have been unscoped.
+
+**The `X-Tenant` header is a stated shortcut.** Real deployments use a subdomain or a
+signed token and never let a client name its own tenant in a plain header. It is here
+because it makes isolation demonstrable from curl and a hackathon has no identity
+provider — a deliberate, documented compromise rather than an oversight.
+
+### How to see it
+
+```bash
+docker compose exec web python manage.py seed_tenant
+```
+
+```bash
+.venv\Scripts\python.exe scripts/walkthrough_07_tenancy.py
+```
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `GET /api/workflows/` as `default` vs `acme` | 9 workflows vs 1 |
+| `GET /api/entities/employee/e_42/` | "Asha Menon, Engineering, IN" vs "Someone Else Entirely, Sales, US" |
+| Same workflow name in both tenants | no collision — uniqueness is `(tenant, name, version)` |
+| `Run.objects.count()` with no context | raises `NoTenantContext` with a message naming the fix |
+| `Run.objects.count()` per tenant | 33 vs 0 |
+| `Run.all_tenants.count()` | 33 |
+| Context after `tenant_context` exits | scoping restored, no leak |
+| Patch acme's employee | fired **acme's** trigger with **acme's** input template (`{"company": "acme"}`); default tenant's run count unchanged |
+| Outbox visibility | default sees 17 changes, acme sees 3 |
+
+Regression: `walkthrough_02` and `walkthrough_04` both still pass unchanged — parallel
+execution and the full rollback saga work identically under scoping. 133 unit tests pass.
+
+### What is left
+
+Nothing from the original plan. Possible next steps, none of them started:
+
+- Per-tenant rate limits and quotas on run creation
+- Row-level security in Postgres as a second line of defence beneath the ORM
+- Signed tenant tokens instead of the `X-Tenant` header
+- `gunicorn` with async workers, so SSE streams do not each hold a thread
 

@@ -19,7 +19,7 @@ from graph.service import link, upsert_entity
 
 
 def current_tenant(request):
-    return default_tenant()
+    return getattr(request, "tenant", None) or default_tenant()
 
 
 class EntityListView(APIView):

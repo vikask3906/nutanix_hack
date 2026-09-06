@@ -1,9 +1,11 @@
-"""Seed the entity graph demo: onboarding workflow, entities and triggers.
+﻿"""Seed the entity graph demo: onboarding workflow, entities and triggers.
 
     python manage.py seed_graph
 """
 
 from django.core.management.base import BaseCommand
+
+from core.tenancy import set_current_tenant
 
 from engine.models import WorkflowDef
 from engine.service import create_definition, default_tenant
@@ -129,6 +131,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         tenant = default_tenant()
+        # Seeding writes scoped rows, so it needs a tenant context like any
+        # other caller. Set for the life of this short-lived command.
+        set_current_tenant(tenant)
 
         existing = WorkflowDef.objects.filter(
             tenant=tenant, name=ONBOARDING["name"]

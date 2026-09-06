@@ -1,4 +1,4 @@
-"""Entity graph writes, and the transactional outbox.
+﻿"""Entity graph writes, and the transactional outbox.
 
 The rule this module exists to enforce:
 
@@ -46,20 +46,20 @@ def upsert_entity(tenant, entity_type, external_id, attrs, replace=False):
     Returns ``(entity, change)`` where change is None if nothing actually moved.
     """
     entity = (
-        Entity.objects.select_for_update()
+        Entity.all_tenants.select_for_update()
         .filter(tenant=tenant, type=entity_type, external_id=external_id)
         .first()
     )
 
     if entity is None:
-        entity = Entity.objects.create(
+        entity = Entity.all_tenants.create(
             tenant=tenant,
             type=entity_type,
             external_id=external_id,
             attrs=dict(attrs),
             version=1,
         )
-        change = EntityChange.objects.create(
+        change = EntityChange.all_tenants.create(
             tenant=tenant,
             entity=entity,
             entity_type=entity_type,
@@ -83,7 +83,7 @@ def upsert_entity(tenant, entity_type, external_id, attrs, replace=False):
     entity.version += 1
     entity.save(update_fields=["attrs", "version", "updated_at"])
 
-    change = EntityChange.objects.create(
+    change = EntityChange.all_tenants.create(
         tenant=tenant,
         entity=entity,
         entity_type=entity_type,
@@ -99,7 +99,7 @@ def upsert_entity(tenant, entity_type, external_id, attrs, replace=False):
 @transaction.atomic
 def link(tenant, src, rel, dst):
     """Create a relationship, e.g. employee -owns-> device."""
-    edge, created = EntityEdge.objects.get_or_create(
+    edge, created = EntityEdge.all_tenants.get_or_create(
         tenant=tenant, src=src, rel=rel, dst=dst
     )
     if created:
@@ -137,7 +137,7 @@ def change_context(change):
 
 
 def unprocessed_count(tenant=None):
-    qs = EntityChange.objects.filter(processed_at__isnull=True)
+    qs = EntityChange.all_tenants.filter(processed_at__isnull=True)
     if tenant:
         qs = qs.filter(tenant=tenant)
     return qs.count()

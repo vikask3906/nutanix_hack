@@ -1,4 +1,4 @@
-"""The execution engine's schema.
+﻿"""The execution engine's schema.
 
 Four tables carry the whole engine:
 
@@ -33,7 +33,7 @@ class WorkflowDef(TenantScopedModel, TimestampedModel):
     spec = models.JSONField()
     description = models.TextField(blank=True, default="")
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         constraints = [
             models.UniqueConstraint(
                 fields=["tenant", "name", "version"],
@@ -97,7 +97,7 @@ class Run(TenantScopedModel, TimestampedModel):
 
     error = models.TextField(blank=True, default="")
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         indexes = [
             models.Index(fields=["tenant", "status", "-created_at"]),
             models.Index(fields=["tenant", "entity_ref"]),
@@ -155,7 +155,7 @@ class RunEvent(TenantScopedModel):
     payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         constraints = [
             models.UniqueConstraint(fields=["run", "seq"], name="uniq_runevent_run_seq")
         ]
@@ -216,7 +216,7 @@ class Task(TenantScopedModel):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         indexes = [
             # The claim query's index. Leading with tenant keeps it useful once
             # multiple tenants share the table.
@@ -228,3 +228,4 @@ class Task(TenantScopedModel):
 
     def __str__(self):
         return f"{self.step_id} [{self.status}] attempt {self.attempt}"
+

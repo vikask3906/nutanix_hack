@@ -28,6 +28,8 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    # Last, so request.user is resolved before the tenant is chosen.
+    "core.middleware.TenantMiddleware",
 ]
 
 ROOT_URLCONF = "cascade.urls"

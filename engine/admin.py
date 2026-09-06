@@ -1,4 +1,19 @@
+﻿"""Admin registrations.
+
+Every ModelAdmin here uses ``all_tenants``: an operator opening the admin is
+explicitly looking across tenants, and the scoped default manager would refuse
+to run without a request-level tenant context.
+"""
+
 from django.contrib import admin
+
+
+class AllTenantsAdmin(admin.ModelAdmin):
+    """Base for scoped models - deliberately unscoped in the admin."""
+
+    def get_queryset(self, request):
+        return self.model.all_tenants.get_queryset()
+
 
 from .models import Run, RunEvent, Task, WorkflowDef
 
@@ -38,14 +53,14 @@ class TaskInline(admin.TabularInline):
 
 
 @admin.register(WorkflowDef)
-class WorkflowDefAdmin(admin.ModelAdmin):
+class WorkflowDefAdmin(AllTenantsAdmin):
     list_display = ("name", "version", "tenant", "created_at")
     list_filter = ("tenant", "name")
     search_fields = ("name",)
 
 
 @admin.register(Run)
-class RunAdmin(admin.ModelAdmin):
+class RunAdmin(AllTenantsAdmin):
     list_display = ("id", "definition", "status", "entity_ref", "last_seq", "created_at")
     list_filter = ("status", "tenant", "definition__name")
     search_fields = ("id", "entity_ref")
@@ -54,14 +69,14 @@ class RunAdmin(admin.ModelAdmin):
 
 
 @admin.register(RunEvent)
-class RunEventAdmin(admin.ModelAdmin):
+class RunEventAdmin(AllTenantsAdmin):
     list_display = ("run", "seq", "type", "step_id", "created_at")
     list_filter = ("type", "tenant")
     search_fields = ("run__id", "step_id")
 
 
 @admin.register(Task)
-class TaskAdmin(admin.ModelAdmin):
+class TaskAdmin(AllTenantsAdmin):
     list_display = (
         "step_id",
         "run",

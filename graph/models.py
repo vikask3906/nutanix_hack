@@ -1,4 +1,4 @@
-"""The entity graph - Cascade's version of Rippling's Employee Graph.
+﻿"""The entity graph - Cascade's version of Rippling's Employee Graph.
 
 The idea: hold every real-world thing you care about as a typed node with free-form
 attributes, plus the relationships between them. Then let *changes* to that graph be
@@ -44,7 +44,7 @@ class Entity(TenantScopedModel, TimestampedModel):
     # graph the same way workers do against the run log.
     version = models.PositiveIntegerField(default=1)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         constraints = [
             models.UniqueConstraint(
                 fields=["tenant", "type", "external_id"],
@@ -76,7 +76,7 @@ class EntityEdge(TenantScopedModel):
     dst = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="in_edges")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         constraints = [
             models.UniqueConstraint(
                 fields=["tenant", "src", "rel", "dst"], name="uniq_edge"
@@ -112,7 +112,7 @@ class EntityChange(TenantScopedModel):
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         indexes = [
             # The dispatcher's claim index: unprocessed rows, oldest first.
             models.Index(fields=["processed_at", "created_at"]),
@@ -155,9 +155,10 @@ class Trigger(TenantScopedModel, TimestampedModel):
     # types without the workflow knowing anything about the graph.
     input_template = models.JSONField(default=dict, blank=True)
 
-    class Meta:
+    class Meta(TenantScopedModel.Meta):
         indexes = [models.Index(fields=["tenant", "entity_type", "enabled"])]
         ordering = ["name"]
 
     def __str__(self):
         return f"{self.name} ({self.entity_type})"
+

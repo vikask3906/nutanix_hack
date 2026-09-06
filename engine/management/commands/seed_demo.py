@@ -1,4 +1,4 @@
-"""Seed demo workflow definitions.
+﻿"""Seed demo workflow definitions.
 
     python manage.py seed_demo
 
@@ -9,6 +9,8 @@ Two shapes, both runnable with no external services:
 """
 
 from django.core.management.base import BaseCommand
+
+from core.tenancy import set_current_tenant
 
 from engine.models import WorkflowDef
 from engine.service import create_definition, default_tenant
@@ -261,6 +263,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         tenant = default_tenant()
+        # Seeding writes scoped rows, so it needs a tenant context like any
+        # other caller. Set for the life of this short-lived command; a
+        # management command is exactly where a forgotten scope goes unnoticed.
+        set_current_tenant(tenant)
         self.stdout.write(f"tenant: {tenant.slug}")
 
         for spec in (

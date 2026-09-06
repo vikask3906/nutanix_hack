@@ -25,12 +25,12 @@ from engine.steps import registered_types
 
 
 def current_tenant(request):
-    """Resolve the tenant for this request.
+    """The tenant TenantMiddleware resolved for this request.
 
-    Block 6 replaces this with header/subdomain resolution and a scoped manager.
-    Keeping it behind a function now means that change touches one place.
+    Falls back to the default tenant only for calls that bypass the middleware,
+    such as the DRF browsable API's own introspection.
     """
-    return default_tenant()
+    return getattr(request, "tenant", None) or default_tenant()
 
 
 class WorkflowDefViewSet(viewsets.ModelViewSet):

@@ -15,6 +15,7 @@ import logging
 
 from django.db import transaction
 
+from core.tenancy import tenant_context
 from engine import retry
 from engine.expressions import ExpressionError, render
 from engine.heartbeat import LeaseHeartbeat
@@ -39,12 +40,20 @@ log = logging.getLogger("cascade.worker")
 
 
 def run_once(worker_id):
-    """Claim and process a single task. Returns True if there was work."""
+    """Claim and process a single task. Returns True if there was work.
+
+    The claim itself spans tenants - a worker takes whatever is due, for anyone -
+    but everything after it runs inside that task's tenant context, so the rest
+    of the code stays scoped and a forgotten filter is still an error. The
+    context is reset on the way out, so one task's tenant never leaks into the
+    next iteration of the loop.
+    """
     task = claim_task(worker_id)
     if task is None:
         return False
 
-    execute_task(task, worker_id)
+    with tenant_context(task.tenant):
+        execute_task(task, worker_id)
     return True
 
 
