@@ -6,363 +6,512 @@
 <title>Cascade</title>
 <style>
   :root {
-    --bg: #0d1117; --panel: #151b23; --panel-2: #1c232c; --line: #2a323d;
-    --text: #e6edf3; --dim: #8b949e; --faint: #6e7681;
-    --pending: #3d444d; --running: #d29922; --ok: #2ea043;
-    --fail: #da3633; --waiting: #8957e5; --undo: #db6d28; --accent: #388bfd;
+    --ink-0:#080b11; --ink-1:#0e131c; --ink-2:#141b26; --ink-3:#1b2431;
+    --line:#232e3d; --line-2:#2e3b4d;
+    --fg:#e8eef7; --fg-dim:#93a1b5; --fg-faint:#5f6d80;
+    --accent:#4cc2ff; --accent-dim:#1d5f80;
+
+    --st-pending:#3b4757; --st-scheduled:#3b6ea8; --st-running:#e0a020;
+    --st-ok:#2fb673; --st-fail:#e05561; --st-wait:#9a7bea; --st-undo:#e08544;
+
+    --r:7px;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing:border-box; }
+  /* Must beat the display:flex/grid rules below - the browser default for
+     [hidden] is display:none, which any explicit display value overrides. */
+  [hidden] { display:none !important; }
+  html,body { height:100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin:0; background:var(--ink-0); color:var(--fg);
+    font:13.5px/1.55 var(--sans);
+    -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; overflow:hidden;
   }
-  header {
-    display: flex; align-items: baseline; gap: 16px;
-    padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
-  }
-  header h1 { margin: 0; font-size: 16px; letter-spacing: .5px; }
-  header .tag { color: var(--faint); font-size: 12px; }
-  header .live { margin-left: auto; font-size: 12px; color: var(--faint); }
-  header .live.on { color: var(--ok); }
+  button { font:inherit; }
 
-  .launch { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 18px;
-            border-bottom: 1px solid var(--line); background: var(--panel-2); }
+  /* ---------- top bar ---------- */
+  .topbar {
+    flex:none; display:flex; align-items:center; gap:14px;
+    padding:0 16px; height:52px;
+    background:linear-gradient(180deg,var(--ink-2),var(--ink-1));
+    border-bottom:1px solid var(--line);
+  }
+  .brand { display:flex; align-items:baseline; gap:9px; }
+  .brand h1 {
+    margin:0; font-size:15px; font-weight:650; letter-spacing:-.2px;
+    background:linear-gradient(92deg,#fff,var(--accent));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .brand span { font-size:11.5px; color:var(--fg-faint); letter-spacing:.1px; }
+
+  .launch { display:flex; gap:6px; align-items:center; margin-left:6px;
+            overflow-x:auto; scrollbar-width:none; }
+  .launch::-webkit-scrollbar { display:none; }
   .launch button {
-    background: #21262d; color: var(--text); border: 1px solid var(--line);
-    border-radius: 5px; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12px;
+    flex:none; display:inline-flex; align-items:center; gap:6px;
+    background:var(--ink-3); color:var(--fg-dim); border:1px solid var(--line);
+    border-radius:var(--r); padding:5px 11px; font-size:12px; cursor:pointer;
+    white-space:nowrap; transition:.13s;
   }
-  .launch button:hover { border-color: var(--accent); color: #fff; }
-  .launch button:disabled { opacity: .5; cursor: default; }
+  .launch button:hover { border-color:var(--accent-dim); color:var(--fg); background:#20303f; }
+  .launch button:active { transform:translateY(1px); }
+  .launch button::before { content:"▶"; font-size:8px; color:var(--accent); }
+  .launch button:disabled { opacity:.45; cursor:default; }
 
-  main { display: grid; grid-template-columns: 290px 1fr; height: calc(100vh - 98px); }
-  #runs { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
-  .run {
-    padding: 9px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
-    display: flex; align-items: center; gap: 8px;
+  .live { margin-left:auto; flex:none; display:flex; align-items:center; gap:7px;
+          font-size:11.5px; color:var(--fg-faint); padding-left:12px; }
+  .live .bulb { width:7px; height:7px; border-radius:50%; background:var(--fg-faint); }
+  .live.on .bulb { background:var(--st-ok); box-shadow:0 0 0 3px rgba(47,182,115,.16); }
+  .live.on { color:var(--st-ok); }
+
+  /* ---------- layout with draggable splitters ---------- */
+  #shell { flex:1; display:flex; min-height:0; }
+  #side { width:280px; min-width:190px; max-width:520px; flex:none;
+          background:var(--ink-1); border-right:1px solid var(--line);
+          display:flex; flex-direction:column; min-height:0; }
+  #vsplit { flex:none; width:5px; cursor:col-resize; background:transparent; position:relative; }
+  #vsplit::after { content:""; position:absolute; inset:0 2px; background:var(--line); transition:.15s; }
+  #vsplit:hover::after, #vsplit.drag::after { background:var(--accent); inset:0 1px; }
+
+  #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+  #hsplit { flex:none; height:5px; cursor:row-resize; position:relative; }
+  #hsplit::after { content:""; position:absolute; inset:2px 0; background:var(--line); transition:.15s; }
+  #hsplit:hover::after, #hsplit.drag::after { background:var(--accent); inset:1px 0; }
+
+  /* ---------- run list ---------- */
+  .side-head { flex:none; padding:9px 13px; font-size:10.5px; letter-spacing:.9px;
+               text-transform:uppercase; color:var(--fg-faint);
+               border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
+  #runs { flex:1; overflow-y:auto; min-height:0; }
+  .run { padding:9px 13px; border-bottom:1px solid var(--line); cursor:pointer;
+         display:flex; gap:9px; align-items:flex-start; transition:background .1s; }
+  .run:hover { background:var(--ink-2); }
+  .run.sel { background:var(--ink-3); box-shadow:inset 2px 0 0 var(--accent); }
+  .run .dot { width:7px; height:7px; border-radius:50%; margin-top:5px; flex:none; }
+  .run .body { min-width:0; flex:1; }
+  .run .nm { font-size:12.5px; font-weight:550; white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; }
+  .run .sub { font-size:11px; color:var(--fg-faint); font-family:var(--mono);
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+  .badge { display:inline-block; font-size:9px; padding:0 4px; border-radius:3px;
+           border:1px solid var(--line-2); color:var(--fg-faint); margin-left:4px;
+           vertical-align:1px; letter-spacing:.4px; }
+
+  /* ---------- canvas header ---------- */
+  .canvas-head { flex:none; display:flex; align-items:center; gap:10px;
+                 padding:9px 14px; border-bottom:1px solid var(--line);
+                 background:var(--ink-1); min-height:44px; }
+  .canvas-head .title { font-size:13px; font-weight:600; }
+  .canvas-head .meta { font-size:11.5px; color:var(--fg-faint); font-family:var(--mono); }
+  .pill { display:inline-flex; align-items:center; gap:5px; font-size:10.5px;
+          font-weight:600; letter-spacing:.4px; padding:2px 8px; border-radius:20px;
+          border:1px solid transparent; }
+  .pill .d { width:5px; height:5px; border-radius:50%; background:currentColor; }
+  .zoomers { margin-left:auto; display:flex; gap:4px; flex:none; }
+  .zoomers button {
+    background:var(--ink-3); border:1px solid var(--line); color:var(--fg-dim);
+    width:26px; height:26px; border-radius:5px; cursor:pointer; font-size:13px;
+    display:flex; align-items:center; justify-content:center; transition:.13s;
   }
-  .run:hover { background: var(--panel-2); }
-  .run.sel { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
-  .run .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run .sub { color: var(--faint); font-size: 11px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .zoomers button.wide { width:auto; padding:0 9px; font-size:11px; }
+  .zoomers button:hover { border-color:var(--accent-dim); color:var(--fg); }
 
-  #right { display: grid; grid-template-rows: 1fr 240px; overflow: hidden; }
-  #dag { overflow: auto; padding: 16px; }
-  #log { border-top: 1px solid var(--line); overflow-y: auto;
-         padding: 10px 14px; background: #0a0e14; font-size: 12px; }
-  #log div { padding: 1px 0; color: var(--dim); }
-  #log .seq { color: var(--faint); display: inline-block; width: 30px; }
-  #log .ty { display: inline-block; width: 210px; }
-  #log b { color: var(--text); font-weight: 600; }
+  .err { padding:7px 14px; background:rgba(224,85,97,.1);
+         border-bottom:1px solid rgba(224,85,97,.3); color:#ffb3b9;
+         font-size:11.5px; font-family:var(--mono); }
 
-  .meta { padding: 0 16px 8px; color: var(--faint); font-size: 12px; }
-  .meta b { color: var(--text); font-weight: 600; }
+  /* ---------- approval ---------- */
+  #approval { flex:none; margin:11px 14px 0; padding:11px 13px; border-radius:var(--r);
+              background:linear-gradient(180deg,rgba(154,123,234,.15),rgba(154,123,234,.06));
+              border:1px solid rgba(154,123,234,.45); }
+  #approval .q { font-size:13px; font-weight:600; margin-bottom:3px; }
+  #approval .who { font-size:11px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:9px; }
+  #approval .row { display:flex; gap:7px; flex-wrap:wrap; }
+  #approval input { font:inherit; font-size:12px; padding:5px 9px; width:190px;
+                    border-radius:5px; background:var(--ink-0); color:var(--fg);
+                    border:1px solid var(--line-2); }
+  #approval button { font-size:12px; padding:5px 14px; border-radius:5px; cursor:pointer;
+                     border:1px solid var(--line-2); background:var(--ink-3); color:var(--fg);
+                     font-weight:550; transition:.13s; }
+  #approval button.yes:hover { border-color:var(--st-ok); background:rgba(47,182,115,.18); }
+  #approval button.no:hover  { border-color:var(--st-fail); background:rgba(224,85,97,.18); }
 
-  #approval {
-    margin: 0 16px 10px; padding: 10px 12px; border-radius: 6px;
-    background: rgba(137,87,229,.12); border: 1px solid var(--waiting);
-  }
-  #approval .q { color: var(--text); margin-bottom: 8px; }
-  #approval .who { color: var(--faint); font-size: 11px; margin-bottom: 8px; }
-  #approval button {
-    font: inherit; font-size: 12px; padding: 4px 12px; margin-right: 6px;
-    border-radius: 5px; cursor: pointer; border: 1px solid var(--line);
-    background: #21262d; color: var(--text);
-  }
-  #approval button.yes { border-color: var(--ok); }
-  #approval button.no { border-color: var(--fail); }
-  #approval input {
-    font: inherit; font-size: 12px; padding: 4px 8px; width: 220px;
-    margin-right: 6px; border-radius: 5px;
-    background: #0d1117; color: var(--text); border: 1px solid var(--line);
-  }
-  .empty { padding: 40px; color: var(--faint); text-align: center; }
+  /* ---------- dag canvas ---------- */
+  #canvas { flex:1; position:relative; overflow:hidden; min-height:0;
+            background:
+              radial-gradient(circle at 1px 1px, var(--line) 1px, transparent 0) 0 0/22px 22px,
+              var(--ink-0);
+            cursor:grab; }
+  #canvas.panning { cursor:grabbing; }
+  #canvas svg { position:absolute; top:0; left:0; width:100%; height:100%; }
+  .hint { position:absolute; left:14px; bottom:11px; font-size:10.5px;
+          color:var(--fg-faint); pointer-events:none; font-family:var(--mono); }
+  .empty { position:absolute; inset:0; display:flex; align-items:center;
+           justify-content:center; color:var(--fg-faint); font-size:13px; }
 
-  .node rect { transition: fill .25s, stroke .25s; }
-  .node text { font-size: 12px; fill: #fff; }
-  .node .st { font-size: 10px; fill: rgba(255,255,255,.75); }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
-  .node.RUNNING rect { animation: pulse 1.1s ease-in-out infinite; }
-  .node.WAITING rect { animation: pulse 2.2s ease-in-out infinite; }
+  .node text { pointer-events:none; }
+  .node .nm { font:600 12.5px var(--sans); fill:#fff; }
+  .node .st { font:600 9.5px var(--mono); letter-spacing:.5px; }
+  @keyframes breathe { 0%,100%{opacity:1} 50%{opacity:.5} }
+  .node.RUNNING .halo { animation:breathe 1.15s ease-in-out infinite; }
+  .node.WAITING .halo { animation:breathe 2.2s ease-in-out infinite; }
+
+  /* ---------- log ---------- */
+  #log { height:220px; min-height:0; overflow-y:auto; background:var(--ink-1);
+         padding:7px 0; font-family:var(--mono); font-size:11.5px; }
+  .ev { display:flex; gap:10px; padding:1.5px 14px; color:var(--fg-dim); }
+  .ev:hover { background:var(--ink-2); }
+  .ev .n { width:26px; text-align:right; color:var(--fg-faint); flex:none; }
+  .ev .t { width:190px; flex:none; }
+  .ev .s { width:150px; flex:none; color:var(--fg); }
+  .ev .x { color:var(--fg-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ev.hot .t { color:#fff; font-weight:600; }
+  .ev.bad .t { color:#ff9aa2; font-weight:600; }
+  .ev.undo .t { color:#ffbb7d; font-weight:600; }
+
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover { background:#3d4d63; }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Cascade</h1>
-  <span class="tag">durable, graph-triggered workflow engine</span>
-  <span class="live" id="live">idle</span>
-</header>
+<div class="topbar">
+  <div class="brand"><h1>Cascade</h1><span>workflow engine</span></div>
+  <div class="launch" id="launch"></div>
+  <div class="live" id="live"><span class="bulb"></span><span id="liveTxt">idle</span></div>
+</div>
 
-<div class="launch" id="launch"><span style="color:var(--faint)">loading workflows…</span></div>
+<div id="shell">
+  <aside id="side">
+    <div class="side-head"><span>Runs</span><span id="runCount"></span></div>
+    <div id="runs"></div>
+  </aside>
+  <div id="vsplit"></div>
 
-<main>
-  <div id="runs"></div>
-  <div id="right">
-    <div>
-      <div class="meta" id="meta"></div>
-      <div id="approval" hidden></div>
-      <div id="dag"><div class="empty">Select a run, or launch one above.</div></div>
+  <div id="main">
+    <div class="canvas-head">
+      <span class="title" id="ttl">No run selected</span>
+      <span class="pill" id="pill" hidden><span class="d"></span><span></span></span>
+      <span class="meta" id="mta"></span>
+      <div class="zoomers">
+        <button id="zout" title="Zoom out">−</button>
+        <button id="zin" title="Zoom in">+</button>
+        <button id="zfit" class="wide" title="Fit to view">Fit</button>
+      </div>
     </div>
+    <div class="err" id="err" hidden></div>
+    <div id="approval" hidden></div>
+    <div id="canvas">
+      <div class="empty" id="empty">Launch a workflow, or pick a run</div>
+      <svg id="svg"><g id="stage"></g></svg>
+      <div class="hint">drag to pan · scroll to zoom · double-click to fit</div>
+    </div>
+    <div id="hsplit"></div>
     <div id="log"></div>
   </div>
-</main>
+</div>
 
 <script>
-const COLOR = {
-  PENDING: 'var(--pending)', SCHEDULED: '#1f6feb', RUNNING: 'var(--running)',
-  SUCCEEDED: 'var(--ok)', FAILED: 'var(--fail)', WAITING: 'var(--waiting)',
-  COMPENSATED: 'var(--undo)', RETRY_SCHEDULED: 'var(--running)',
+const ST = {
+  PENDING:'--st-pending', SCHEDULED:'--st-scheduled', RUNNING:'--st-running',
+  SUCCEEDED:'--st-ok', FAILED:'--st-fail', WAITING:'--st-wait',
+  COMPENSATED:'--st-undo', RETRY_SCHEDULED:'--st-running',
 };
-const RUN_COLOR = {
-  PENDING: 'var(--pending)', RUNNING: 'var(--running)', WAITING: 'var(--waiting)',
-  COMPENSATING: 'var(--undo)', SUCCEEDED: 'var(--ok)', FAILED: 'var(--fail)',
-  CANCELLED: 'var(--faint)',
+const RUNST = {
+  PENDING:'--st-pending', RUNNING:'--st-running', WAITING:'--st-wait',
+  COMPENSATING:'--st-undo', SUCCEEDED:'--st-ok', FAILED:'--st-fail',
+  CANCELLED:'--st-pending',
 };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const $  = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-let selected = null, source = null, spec = null, ctx = null;
+let selected=null, source=null, spec=null, ctx=null;
+let view={x:0,y:0,k:1}, bounds=null;
 
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+/* ================= splitters ================= */
+function persist(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+function restore(k,d){ try{ return localStorage.getItem(k) ?? d; }catch(e){ return d; } }
 
-/* ---- launch buttons ------------------------------------------------- */
-async function loadWorkflows() {
-  const r = await fetch('/api/workflows/');
-  const data = await r.json();
-  const list = data.results || data;
-  const box = $('launch');
-  box.innerHTML = '';
-  list.forEach(w => {
-    const b = document.createElement('button');
-    b.textContent = '▶ ' + w.name;
-    b.onclick = () => launch(w.name, b);
+$('side').style.width = restore('cascade.side','280') + 'px';
+$('log').style.height = restore('cascade.log','220') + 'px';
+
+function drag(handle, onMove){
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault(); handle.classList.add('drag');
+    document.body.style.userSelect='none';
+    const move = ev => onMove(ev);
+    const up = () => {
+      handle.classList.remove('drag'); document.body.style.userSelect='';
+      window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
+      fit();
+    };
+    window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+  });
+}
+drag($('vsplit'), e => {
+  const w = Math.max(190, Math.min(520, e.clientX));
+  $('side').style.width = w+'px'; persist('cascade.side', w);
+});
+drag($('hsplit'), e => {
+  const rect = $('main').getBoundingClientRect();
+  const h = Math.max(80, Math.min(rect.height-140, rect.bottom - e.clientY));
+  $('log').style.height = h+'px'; persist('cascade.log', Math.round(h));
+});
+
+/* ================= pan + zoom ================= */
+const canvas=$('canvas'), stage=$('stage');
+function applyView(){ stage.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
+
+function fit(){
+  if(!bounds) return;
+  const r = canvas.getBoundingClientRect();
+  if(r.width<40||r.height<40) return;
+  const pad = 44;
+  const k = Math.min((r.width-pad*2)/bounds.w, (r.height-pad*2)/bounds.h, 1.35);
+  view.k = Math.max(k, .18);
+  view.x = (r.width  - bounds.w*view.k)/2 - bounds.x*view.k;
+  view.y = (r.height - bounds.h*view.k)/2 - bounds.y*view.k;
+  applyView();
+}
+function zoomBy(f, cx, cy){
+  const r = canvas.getBoundingClientRect();
+  cx = cx ?? r.width/2; cy = cy ?? r.height/2;
+  const k2 = Math.max(.15, Math.min(3, view.k*f));
+  view.x = cx - (cx-view.x)*(k2/view.k);
+  view.y = cy - (cy-view.y)*(k2/view.k);
+  view.k = k2; applyView();
+}
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  zoomBy(e.deltaY<0?1.13:1/1.13, e.clientX-r.left, e.clientY-r.top);
+}, {passive:false});
+
+let panning=false, from=null;
+canvas.addEventListener('mousedown', e => {
+  panning=true; from={x:e.clientX-view.x, y:e.clientY-view.y}; canvas.classList.add('panning');
+});
+window.addEventListener('mousemove', e => {
+  if(!panning) return;
+  view.x=e.clientX-from.x; view.y=e.clientY-from.y; applyView();
+});
+window.addEventListener('mouseup', ()=>{ panning=false; canvas.classList.remove('panning'); });
+canvas.addEventListener('dblclick', fit);
+$('zin').onclick  = ()=>zoomBy(1.25);
+$('zout').onclick = ()=>zoomBy(1/1.25);
+$('zfit').onclick = fit;
+window.addEventListener('resize', fit);
+
+/* ================= launch bar ================= */
+async function loadWorkflows(){
+  const d = await (await fetch('/api/workflows/')).json();
+  const box=$('launch'); box.innerHTML='';
+  (d.results||d).forEach(w => {
+    const b=document.createElement('button');
+    b.textContent=w.name;
+    b.onclick=()=>launch(w.name,b);
     box.appendChild(b);
   });
 }
-
-async function launch(name, btn) {
-  if (btn) { btn.disabled = true; setTimeout(() => btn.disabled = false, 800); }
-  // rolling_cluster_upgrade needs a node; everything else takes no input.
-  const body = { workflow: name };
-  if (name === 'rolling_cluster_upgrade') {
-    body.input = { node: 'node-' + (1 + Math.floor(Math.random() * 5)) };
-    body.entity_ref = 'node:' + body.input.node;
+async function launch(name, btn){
+  if(btn){ btn.disabled=true; setTimeout(()=>btn.disabled=false,700); }
+  const body={workflow:name};
+  if(name==='rolling_cluster_upgrade'){
+    const n='node-'+(1+Math.floor(Math.random()*5));
+    body.input={node:n}; body.entity_ref='node:'+n;
   }
-  const r = await fetch('/api/runs/', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  });
-  const run = await r.json();
+  const run = await (await fetch('/api/runs/',{
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  })).json();
   await loadRuns();
-  select(run.id);
+  await select(run.id);
 }
 
-/* ---- run list ------------------------------------------------------- */
-async function loadRuns() {
-  const r = await fetch('/api/runs/?limit=40');
-  const data = await r.json();
-  const list = data.results || data;
-  const box = $('runs');
-  box.innerHTML = '';
-  list.forEach(run => {
-    const el = document.createElement('div');
-    el.className = 'run' + (run.id === selected ? ' sel' : '');
-    el.onclick = () => select(run.id);
+/* ================= run list ================= */
+async function loadRuns(){
+  const d = await (await fetch('/api/runs/?limit=60')).json();
+  const list = d.results||d;
+  $('runCount').textContent = d.count ?? list.length;
+  const box=$('runs'); box.innerHTML='';
+  list.forEach(r => {
+    const el=document.createElement('div');
+    el.className='run'+(r.id===selected?' sel':'');
+    el.onclick=()=>select(r.id);
+    const auto = r.trigger_source && r.trigger_source.startsWith('trigger:');
     el.innerHTML =
-      `<span class="dot" style="background:${RUN_COLOR[run.status] || 'var(--pending)'}"></span>` +
-      `<span class="nm">${esc(run.workflow)}` +
-      `<div class="sub">${esc(run.status)}` +
-      (run.entity_ref ? ' · ' + esc(run.entity_ref) : '') +
-      (run.trigger_source && run.trigger_source.startsWith('trigger:') ? ' · auto' : '') +
-      `</div></span>`;
+      `<span class="dot" style="background:${css(RUNST[r.status]||'--st-pending')}"></span>`+
+      `<span class="body"><span class="nm">${esc(r.workflow)}</span>`+
+      `<div class="sub">${esc(r.status)}${r.entity_ref?' · '+esc(r.entity_ref):''}`+
+      `${auto?'<span class="badge">AUTO</span>':''}</div></span>`;
     box.appendChild(el);
   });
 }
 
-/* ---- DAG layout: longest path from the roots ------------------------ */
-function layout(steps) {
-  const by = {}; steps.forEach(s => by[s.id] = s);
-  const lvl = {};
-  const depth = (id, seen = new Set()) => {
-    if (lvl[id] !== undefined) return lvl[id];
-    if (seen.has(id)) return 0;              // cycles are rejected at save time
+/* ================= dag ================= */
+function layout(steps){
+  const by={}; steps.forEach(s=>by[s.id]=s);
+  const lvl={};
+  const depth=(id,seen=new Set())=>{
+    if(lvl[id]!==undefined) return lvl[id];
+    if(seen.has(id)) return 0;
     seen.add(id);
-    let needs = by[id].needs || [];
-    if (typeof needs === 'string') needs = [needs];
-    lvl[id] = needs.length ? Math.max(...needs.map(n => depth(n, seen))) + 1 : 0;
+    let n=by[id].needs||[]; if(typeof n==='string') n=[n];
+    lvl[id]=n.length?Math.max(...n.map(x=>depth(x,seen)))+1:0;
     return lvl[id];
   };
-  steps.forEach(s => depth(s.id));
-
-  const cols = {};
-  steps.forEach(s => (cols[lvl[s.id]] = cols[lvl[s.id]] || []).push(s.id));
-
-  const W = 170, H = 52, GX = 60, GY = 22;
-  const pos = {};
-  Object.keys(cols).forEach(l => {
-    cols[l].forEach((id, i) => {
-      pos[id] = { x: 10 + l * (W + GX), y: 10 + i * (H + GY), w: W, h: H };
-    });
+  steps.forEach(s=>depth(s.id));
+  const cols={}; steps.forEach(s=>(cols[lvl[s.id]]=cols[lvl[s.id]]||[]).push(s.id));
+  const W=176,H=58,GX=64,GY=26, pos={};
+  const tallest=Math.max(...Object.values(cols).map(c=>c.length));
+  Object.keys(cols).forEach(l=>{
+    const col=cols[l];
+    const offset=((tallest-col.length)*(H+GY))/2;      // vertically centre short columns
+    col.forEach((id,i)=>{ pos[id]={x:l*(W+GX), y:offset+i*(H+GY), w:W, h:H}; });
   });
-  const width = 20 + (Math.max(...Object.keys(cols).map(Number)) + 1) * (W + GX);
-  const height = 20 + Math.max(...Object.values(cols).map(c => c.length)) * (H + GY);
-  return { pos, width, height };
+  return {pos, w:(Math.max(...Object.keys(cols).map(Number))+1)*(W+GX)-GX, h:tallest*(H+GY)-GY};
 }
 
-function renderDag() {
-  if (!spec) return;
-  const steps = spec.steps || [];
-  const { pos, width, height } = layout(steps);
-  const stepState = (ctx && ctx.steps) || {};
+function renderDag(){
+  if(!spec){ stage.innerHTML=''; bounds=null; $('empty').hidden=false; return; }
+  $('empty').hidden = true;
+  const steps=spec.steps||[];
+  const {pos,w,h}=layout(steps);
+  bounds={x:0,y:0,w,h};
+  const state=(ctx&&ctx.steps)||{};
 
-  let edges = '', nodes = '';
-  steps.forEach(s => {
-    let needs = s.needs || [];
-    if (typeof needs === 'string') needs = [needs];
-    needs.forEach(n => {
-      const a = pos[n], b = pos[s.id];
-      if (!a || !b) return;
-      const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2;
-      const mid = (x1 + x2) / 2;
-      const done = (stepState[n] || {}).status === 'SUCCEEDED';
-      edges += `<path d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}"
-        fill="none" stroke="${done ? 'var(--ok)' : 'var(--line)'}" stroke-width="2"/>`;
+  let edges='',nodes='';
+  steps.forEach(s=>{
+    let n=s.needs||[]; if(typeof n==='string') n=[n];
+    n.forEach(p=>{
+      const a=pos[p],b=pos[s.id]; if(!a||!b) return;
+      const x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2, m=(x1+x2)/2;
+      const done=(state[p]||{}).status==='SUCCEEDED';
+      edges+=`<path d="M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}" fill="none"
+        stroke="${done?css('--st-ok'):css('--line-2')}" stroke-width="${done?2.2:1.6}"
+        opacity="${done?.85:.55}"/>`;
     });
   });
 
-  steps.forEach(s => {
-    const p = pos[s.id];
-    const st = (stepState[s.id] || {}).status || 'PENDING';
-    const attempts = (stepState[s.id] || {}).attempts || 0;
-    const label = st + (attempts > 1 ? ` · try ${attempts}` : '');
-    nodes += `<g class="node ${st}">
-      <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="7"
-            fill="${COLOR[st] || 'var(--pending)'}" stroke="rgba(0,0,0,.35)"/>
-      <text x="${p.x + 12}" y="${p.y + 22}">${esc(s.id)}</text>
-      <text class="st" x="${p.x + 12}" y="${p.y + 38}">${esc(label)}</text>
+  steps.forEach(s=>{
+    const p=pos[s.id], sl=state[s.id]||{}, st=sl.status||'PENDING';
+    const col=css(ST[st]||'--st-pending');
+    const tries=sl.attempts>1?` ·${sl.attempts}`:'';
+    nodes+=`<g class="node ${st}">
+      <rect class="halo" x="${p.x-3}" y="${p.y-3}" width="${p.w+6}" height="${p.h+6}" rx="11"
+            fill="${col}" opacity="${st==='PENDING'?0:.2}"/>
+      <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="9"
+            fill="${col}" fill-opacity="${st==='PENDING'?.22:.95}"
+            stroke="${col}" stroke-width="1.4"/>
+      <text class="nm" x="${p.x+14}" y="${p.y+25}"
+            fill="${st==='PENDING'?css('--fg-dim'):'#0b1017'}">${esc(s.id)}</text>
+      <text class="st" x="${p.x+14}" y="${p.y+42}"
+            fill="${st==='PENDING'?css('--fg-faint'):'rgba(8,14,20,.72)'}">${esc(st+tries)}</text>
     </g>`;
   });
 
-  $('dag').innerHTML =
-    `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${edges}${nodes}</svg>`;
+  stage.innerHTML = edges + nodes;
 }
 
-/* ---- selecting a run, and streaming it ------------------------------ */
-async function select(id) {
-  selected = id;
-  if (source) { source.close(); source = null; }
-  $('log').innerHTML = '';
+/* ================= selection + stream ================= */
+async function select(id){
+  selected=id;
+  if(source){ source.close(); source=null; }
+  $('log').innerHTML='';
 
-  const detail = await (await fetch(`/api/runs/${id}/`)).json();
-  spec = detail.spec; ctx = detail.context;
+  const d = await (await fetch(`/api/runs/${id}/`)).json();
+  spec=d.spec; ctx=d.context;
 
-  $('meta').innerHTML =
-    `<b>${esc(detail.workflow)}</b> v${detail.workflow_version} · ` +
-    `<b>${esc(detail.status)}</b>` +
-    (detail.entity_ref ? ` · ${esc(detail.entity_ref)}` : '') +
-    ` · ${esc(detail.trigger_source)}` +
-    (detail.error ? `<br><span style="color:var(--fail)">${esc(detail.error)}</span>` : '');
+  $('ttl').textContent = d.workflow;
+  const p=$('pill'); p.hidden=false;
+  const c=css(RUNST[d.status]||'--st-pending');
+  p.style.color=c; p.style.borderColor=c; p.style.background=c+'22';
+  p.lastElementChild.textContent=d.status;
+  $('mta').textContent = `v${d.workflow_version}` +
+    (d.entity_ref?` · ${d.entity_ref}`:'') +
+    ` · ${d.trigger_source.startsWith('trigger:')?'auto-triggered':'manual'}`;
+  $('err').hidden = !d.error; $('err').textContent = d.error||'';
 
-  renderDag();
+  renderDag(); fit();
   await renderApprovals(id);
-  detail.events.forEach(appendLog);
+  d.events.forEach(addEvent);
   await loadRuns();
 
-  if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(detail.status)) {
-    setLive(false);
-    return;
-  }
-  // An approval with no deadline emits nothing until a person acts, so there
-  // is no point holding a stream open for it.
-  if (detail.status === 'WAITING' && !$('approval').hidden) { setLive(false); return; }
-  // Resume the stream from where the snapshot ended - the event log means a
-  // client only ever needs "everything after seq N", so nothing is missed and
-  // nothing arrives twice.
-  openStream(id, detail.last_seq);
+  if(['SUCCEEDED','FAILED','CANCELLED'].includes(d.status)){ setLive(false); return; }
+  if(d.status==='WAITING' && !$('approval').hidden){ setLive(false); return; }
+  openStream(id, d.last_seq);
 }
 
-function openStream(id, since) {
+function openStream(id, since){
   setLive(true);
-  source = new EventSource(`/api/runs/${id}/stream/?since=${since || 0}`);
-
+  source=new EventSource(`/api/runs/${id}/stream/?since=${since||0}`);
   source.addEventListener('run_event', async e => {
-    const ev = JSON.parse(e.data);
-    appendLog(ev);
-    // Re-read derived state rather than folding events in the browser: the
-    // server already does that, and two folds would eventually disagree.
-    const d = await (await fetch(`/api/runs/${id}/`)).json();
-    ctx = d.context;
-    renderDag();
+    addEvent(JSON.parse(e.data));
+    const d=await (await fetch(`/api/runs/${id}/`)).json();
+    ctx=d.context; renderDag();
   });
-
-  source.addEventListener('status', async () => { await loadRuns(); });
-
+  source.addEventListener('status', loadRuns);
   source.addEventListener('done', async () => {
-    source.close(); source = null;
-    setLive(false);
-    await select(id);
+    source.close(); source=null; setLive(false); await select(id);
   });
-
-  source.onerror = () => { setLive(false); };
+  source.onerror=()=>setLive(false);
+}
+function setLive(on){
+  $('live').className='live'+(on?' on':'');
+  $('liveTxt').textContent=on?'streaming':'idle';
 }
 
-/* ---- human approvals ------------------------------------------------ */
-async function renderApprovals(id) {
-  const box = $('approval');
-  const { pending } = await (await fetch(`/api/runs/${id}/approvals/`)).json();
-
-  if (!pending || !pending.length) { box.hidden = true; box.innerHTML = ''; return; }
-
-  const a = pending[0];
-  box.hidden = false;
+/* ================= approvals ================= */
+async function renderApprovals(id){
+  const box=$('approval');
+  const {pending}=await (await fetch(`/api/runs/${id}/approvals/`)).json();
+  if(!pending||!pending.length){ box.hidden=true; box.innerHTML=''; return; }
+  const a=pending[0];
+  box.hidden=false;
   box.innerHTML =
-    `<div class="q">⏸ ${esc(a.prompt)}</div>` +
-    `<div class="who">step <b>${esc(a.step_id)}</b> · approvers: ${esc((a.approvers || []).join(', ') || 'anyone')}` +
-    ` · ${a.deadline ? 'deadline ' + esc(a.deadline.slice(11, 19)) : 'no deadline — waits indefinitely, costing nothing'}</div>` +
-    `<input id="actor" placeholder="your name" value="ops-oncall">` +
-    `<button class="yes" id="yes">Approve</button>` +
-    `<button class="no" id="no">Deny</button>`;
-
-  $('yes').onclick = () => decide(id, a.step_id, 'approve');
-  $('no').onclick = () => decide(id, a.step_id, 'deny');
+    `<div class="q">${esc(a.prompt)}</div>`+
+    `<div class="who">${esc(a.step_id)} · ${esc((a.approvers||[]).join(', ')||'anyone')} · `+
+    `${a.deadline?'deadline '+esc(a.deadline.slice(11,19)):'no deadline'}</div>`+
+    `<div class="row"><input id="actor" placeholder="your name" value="ops-oncall">`+
+    `<button class="yes" id="yes">Approve</button><button class="no" id="no">Deny</button></div>`;
+  $('yes').onclick=()=>decide(id,a.step_id,'approve');
+  $('no').onclick =()=>decide(id,a.step_id,'deny');
 }
-
-async function decide(id, step_id, decision) {
-  const actor = ($('actor') || {}).value || 'anonymous';
-  await fetch(`/api/runs/${id}/approve/`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ step_id, decision, actor })
+async function decide(id, step_id, decision){
+  const actor=($('actor')||{}).value||'anonymous';
+  await fetch(`/api/runs/${id}/approve/`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({step_id,decision,actor})
   });
-  await select(id);   // re-read; the worker takes it from here
+  await select(id);
 }
 
-function setLive(on) {
-  const el = $('live');
-  el.textContent = on ? '● streaming' : 'idle';
-  el.className = 'live' + (on ? ' on' : '');
-}
+/* ================= log ================= */
+function addEvent(ev){
+  const p=ev.payload||{};
+  let note='';
+  if(p.error) note=String(p.error).slice(0,150);
+  else if(p.resume_at) note='until '+String(p.resume_at).slice(11,19);
+  else if(p.delay_seconds!==undefined) note=`retry in ${p.delay_seconds}s`;
+  else if(p.reason) note=p.reason+(p.dead_worker?' · '+p.dead_worker.slice(0,12):'');
+  else if(p.prompt) note=p.prompt;
+  else if(p.actor) note='by '+p.actor;
 
-function appendLog(ev) {
-  const box = $('log');
-  const d = document.createElement('div');
-  let note = '';
-  const p = ev.payload || {};
-  if (p.error) note = ' — ' + esc(String(p.error).slice(0, 120));
-  else if (p.resume_at) note = ' — until ' + esc(String(p.resume_at).slice(11, 19));
-  else if (p.delay_seconds !== undefined) note = ` — retry in ${p.delay_seconds}s`;
-  else if (p.reason) note = ' — ' + esc(p.reason);
-
-  const highlight = /COMPENSAT|FAILED|TIMER/.test(ev.type);
-  d.innerHTML = `<span class="seq">${ev.seq}</span>` +
-                `<span class="ty">${highlight ? '<b>' + esc(ev.type) + '</b>' : esc(ev.type)}</span>` +
-                esc(ev.step_id) + note;
-  box.appendChild(d);
-  box.scrollTop = box.scrollHeight;
+  const d=document.createElement('div');
+  d.className='ev'+(/FAILED/.test(ev.type)?' bad':/COMPENSAT/.test(ev.type)?' undo':
+                    /TIMER|APPROVAL|RUN_/.test(ev.type)?' hot':'');
+  d.innerHTML=`<span class="n">${ev.seq}</span><span class="t">${esc(ev.type)}</span>`+
+              `<span class="s">${esc(ev.step_id)}</span><span class="x">${esc(note)}</span>`;
+  const box=$('log'); box.appendChild(d); box.scrollTop=box.scrollHeight;
 }
 
 loadWorkflows();
 loadRuns();
-setInterval(loadRuns, 3000);   // catches runs started by the graph dispatcher
+setInterval(loadRuns, 3000);
 </script>
 </body>
 </html>
