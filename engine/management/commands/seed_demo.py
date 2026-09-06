@@ -90,6 +90,47 @@ FAILING = {
 }
 
 
+SLOW = {
+    "name": "demo_slow",
+    "steps": [
+        {"id": "prepare", "type": "noop", "config": {"output": {"ready": True}}},
+        {
+            # Long enough to kill the worker holding it, and long enough that the
+            # heartbeat has to renew the lease several times to stay alive.
+            "id": "long_task",
+            "type": "shell",
+            "needs": ["prepare"],
+            "config": {
+                "cmd": "python -c \"import time; [time.sleep(1) for _ in range(25)]; print('long task finished')\"",
+                "timeout_s": 120,
+            },
+        },
+        {"id": "finish", "type": "noop", "needs": ["long_task"],
+         "config": {"output": {"done": True}}},
+    ],
+}
+
+FLAKY = {
+    "name": "demo_flaky",
+    "steps": [
+        {"id": "setup", "type": "noop", "config": {"output": {"ready": True}}},
+        {
+            # Fails roughly two times in three, so the retry policy is what gets
+            # it through. Exercises backoff without needing a real flaky service.
+            "id": "unreliable",
+            "type": "shell",
+            "needs": ["setup"],
+            "config": {
+                "cmd": "python -c \"import random,sys; sys.exit(0 if random.random() < 0.34 else 1)\""
+            },
+            "retry": {"max": 6, "backoff": "exponential", "base_ms": 400, "max_ms": 5000},
+        },
+        {"id": "report", "type": "noop", "needs": ["unreliable"],
+         "config": {"output": {"reported": True}}},
+    ],
+}
+
+
 class Command(BaseCommand):
     help = "Create the demo workflow definitions."
 
@@ -97,7 +138,7 @@ class Command(BaseCommand):
         tenant = default_tenant()
         self.stdout.write(f"tenant: {tenant.slug}")
 
-        for spec in (LINEAR, DIAMOND, FAILING):
+        for spec in (LINEAR, DIAMOND, FAILING, SLOW, FLAKY):
             existing = WorkflowDef.objects.filter(
                 tenant=tenant, name=spec["name"]
             ).order_by("-version").first()

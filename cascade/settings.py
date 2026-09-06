@@ -107,3 +107,12 @@ TASK_HEARTBEAT_SECONDS = int(os.environ.get("TASK_HEARTBEAT_SECONDS", "10"))
 
 # Idle sleep when the queue is empty, in seconds.
 WORKER_POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "1.0"))
+
+# How often the reaper looks for leases that have expired.
+REAPER_POLL_SECONDS = float(os.environ.get("REAPER_POLL_SECONDS", "5.0"))
+
+# Absolute ceiling on how many times one step may be attempted, regardless of
+# what its retry block says. This is the poison-task guard: a step that reliably
+# kills the worker executing it would otherwise be recovered by the reaper
+# forever, taking a worker down each time. Ten strikes and the run fails.
+MAX_TASK_ATTEMPTS = int(os.environ.get("MAX_TASK_ATTEMPTS", "10"))

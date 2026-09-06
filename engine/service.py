@@ -34,6 +34,7 @@ from engine.models import (
     TaskStatus,
     WorkflowDef,
 )
+from engine import retry
 from engine.replay import next_run_state, ready_steps, replay
 from engine.spec import validate_spec
 
@@ -226,6 +227,176 @@ def finish_task(task):
     task.lease_owner = ""
     task.lease_expires_at = None
     task.save(update_fields=["status", "lease_owner", "lease_expires_at"])
+
+
+def renew_lease(task, worker_id, now=None):
+    """Extend a lease we still hold. Returns False if we have lost it.
+
+    The WHERE clause is the point: we only extend if we are still the recorded
+    owner and the task is still LEASED. If the reaper decided we were dead and
+    handed the work to someone else, this updates zero rows and tells us so.
+    """
+    now = now or timezone.now()
+
+    updated = Task.objects.filter(
+        pk=task.pk, lease_owner=worker_id, status=TaskStatus.LEASED
+    ).update(lease_expires_at=now + timedelta(seconds=settings.TASK_LEASE_SECONDS))
+
+    return updated == 1
+
+
+def finish_task_if_owned(task, worker_id):
+    """Mark a task done, but only if we still hold its lease.
+
+    This is a fencing check, and it closes a genuine hole. Suppose a worker
+    stalls long enough for its lease to expire - a long GC pause, a hung syscall,
+    a paused container. The reaper reassigns the task, another worker runs the
+    step, and then the original worker wakes up and tries to record ITS result.
+    Without this check the log would gain a second, stale result for a step
+    someone else already completed.
+
+    Losing the race here is not an error. It means the system correctly decided
+    we were gone, and the right response is to discard our work silently.
+    """
+    updated = Task.objects.filter(
+        pk=task.pk, lease_owner=worker_id, status=TaskStatus.LEASED
+    ).update(status=TaskStatus.DONE, lease_owner="", lease_expires_at=None)
+
+    return updated == 1
+
+
+def schedule_retry(run, step, task, error):
+    """Record a failed attempt and queue the next one after a jittered delay."""
+    delay = retry.delay_seconds(task.attempt, step.get("retry"))
+    next_attempt = task.attempt + 1
+    run_after = timezone.now() + timedelta(seconds=delay)
+
+    append_event(
+        run,
+        EventType.STEP_FAILED,
+        task.step_id,
+        {"error": error, "attempt": task.attempt},
+    )
+    append_event(
+        run,
+        EventType.STEP_RETRY_SCHEDULED,
+        task.step_id,
+        {
+            "error": error,
+            "attempt": task.attempt,
+            "next_attempt": next_attempt,
+            "delay_seconds": round(delay, 3),
+        },
+    )
+
+    enqueue_step(
+        run,
+        task.step_id,
+        kind=task.kind,
+        attempt=next_attempt,
+        run_after=run_after,
+    )
+
+    log.info(
+        "retry %s step=%s attempt=%s -> %s in %.2fs",
+        run.id, task.step_id, task.attempt, next_attempt, delay,
+    )
+    return delay
+
+
+# ---------------------------------------------------------------------------
+# The reaper
+# ---------------------------------------------------------------------------
+
+
+def reap_expired_leases(now=None):
+    """Return tasks whose holder stopped heartbeating to the ready queue.
+
+    This is the entire crash-recovery mechanism. There is no failure detector,
+    no health check, no membership protocol - a worker that stops renewing its
+    lease is, by definition, gone. If it was merely slow, ``finish_task_if_owned``
+    stops it writing a stale result when it comes back.
+
+    Recovered tasks get a fresh attempt number, which means a fresh idempotency
+    key, so a downstream system can tell the retry apart from the original.
+    """
+    now = now or timezone.now()
+    recovered = []
+
+    while True:
+        with transaction.atomic():
+            task = (
+                Task.objects.select_for_update(skip_locked=True)
+                .filter(status=TaskStatus.LEASED, lease_expires_at__lt=now)
+                .order_by("lease_expires_at")
+                .first()
+            )
+
+            if task is None:
+                break
+
+            dead_owner = task.lease_owner
+            next_attempt = task.attempt + 1
+
+            if next_attempt > settings.MAX_TASK_ATTEMPTS:
+                # Poison-task guard: this step has taken down a worker too many
+                # times. Stop feeding it workers and fail the run.
+                task.status = TaskStatus.DONE
+                task.lease_owner = ""
+                task.lease_expires_at = None
+                task.save(update_fields=["status", "lease_owner", "lease_expires_at"])
+                _fail_poisoned_step(task, dead_owner)
+                recovered.append((task, "poisoned"))
+                continue
+
+            task.attempt = next_attempt
+            task.status = TaskStatus.READY
+            task.lease_owner = ""
+            task.lease_expires_at = None
+            task.run_after = now
+            task.idempotency_key = idempotency_key(
+                task.run_id, task.step_id, task.kind, next_attempt
+            )
+            task.save(
+                update_fields=[
+                    "attempt", "status", "lease_owner",
+                    "lease_expires_at", "run_after", "idempotency_key",
+                ]
+            )
+
+        log.warning(
+            "recovered %s step=%s from dead worker %s (attempt %s)",
+            task.run_id, task.step_id, dead_owner or "?", next_attempt,
+        )
+
+        append_event(
+            task.run,
+            EventType.STEP_RETRY_SCHEDULED,
+            task.step_id,
+            {
+                "reason": "lease expired",
+                "dead_worker": dead_owner,
+                "next_attempt": next_attempt,
+            },
+        )
+        recovered.append((task, "recovered"))
+
+    return recovered
+
+
+def _fail_poisoned_step(task, dead_owner):
+    run = task.run
+    spec = run.definition.spec
+    error = (
+        f"step exceeded {settings.MAX_TASK_ATTEMPTS} attempts; "
+        f"last worker to die holding it was {dead_owner or 'unknown'}"
+    )
+
+    append_event(run, EventType.STEP_FAILED, task.step_id, {"error": error})
+    context = load_context(run)
+    close_run_if_finished(run, spec, context)
+    sync_run_projection(run, spec, load_context(run))
+    log.error("poisoned %s step=%s - %s", run.id, task.step_id, error)
 
 
 # ---------------------------------------------------------------------------

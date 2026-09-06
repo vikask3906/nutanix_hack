@@ -30,6 +30,11 @@ services:
       POSTGRES_PORT: "5432"
       DJANGO_DEBUG: "1"
       DJANGO_SECRET_KEY: dev-only-not-a-real-secret
+      # Tuned short so crash recovery is visible inside a demo. A lease this
+      # short is only safe because workers heartbeat while a step runs.
+      TASK_LEASE_SECONDS: "10"
+      TASK_HEARTBEAT_SECONDS: "3"
+      REAPER_POLL_SECONDS: "2"
     ports:
       - "8000:8000"
     depends_on:
@@ -43,6 +48,18 @@ services:
   worker:
     build: .
     command: python manage.py run_worker
+    environment: *env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  # Returns tasks whose holder stopped heartbeating. Its own process so you can
+  # watch it act during the crash demo.
+  reaper:
+    build: .
+    command: python manage.py run_reaper
     environment: *env
     depends_on:
       db:
