@@ -52,4 +52,5 @@ No Kafka, no Celery, no separate scheduler.
 
 ## Team
 
-Vikas Kathuria · Jayansh · Krish Shah
+Vikas Kathuria || Kushal Tiwari || Dakshin Gautham
+
