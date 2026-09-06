@@ -146,6 +146,15 @@ class Trigger(TenantScopedModel, TimestampedModel):
     )
     enabled = models.BooleanField(default=True)
 
+    # How the change becomes the run's input. Rendered with the same expression
+    # engine step configs use, against {entity, before, after, changed_keys}:
+    #
+    #     {"node": "{{ entity.external_id }}"}
+    #
+    # This is what lets one workflow be driven by several different entity
+    # types without the workflow knowing anything about the graph.
+    input_template = models.JSONField(default=dict, blank=True)
+
     class Meta:
         indexes = [models.Index(fields=["tenant", "entity_type", "enabled"])]
         ordering = ["name"]

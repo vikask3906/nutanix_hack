@@ -15,7 +15,7 @@ block is done. Don't move on until it's true.
 | 3 | Retries, backoff, the lease reaper | done |
 | 4 | Durable timers (parallel already works) | next |
 | 5 | Saga compensation + fake cluster | done |
-| 6 | Entity graph, outbox, triggers | next |
+| 6 | Entity graph, outbox, triggers | done |
 | 7 | SSE and the DAG UI | |
 
 ---
@@ -445,4 +445,97 @@ This cost a confusing debugging cycle where compensation appeared not to fire at
 - `wait` is spec-valid but has no plugin — durable timers are Block 4, still unbuilt.
 - Runs are still started by hand, one POST per node. Block 6 makes graph changes
   trigger them.
+
+
+---
+
+## Block 6 — The entity graph triggers the work
+
+The Rippling half. Until now every run was started by a POST: someone had to notice a
+thing happened and ask for the workflow. Now the graph itself is the trigger.
+
+### What was added
+
+- **`graph/predicates.py`** — pure predicate evaluation with `changed` / `match` / `was`
+  clauses and operators (`in`, `ne`, `gt`, `exists`, `contains`, ...).
+- **`graph/service.py`** — entity upsert writing the entity and its outbox row in one
+  transaction.
+- **`graph/dispatcher.py`** + `manage.py run_dispatcher` + a compose service.
+- **`Trigger.input_template`** — how a change becomes a run's input.
+- Graph REST API: entities, edges, changes (the outbox), triggers.
+- `manage.py seed_graph` — the `employee_onboarding` workflow, entities, two triggers.
+- App/device provisioning endpoints on the fake service.
+
+### Why it is shaped this way
+
+**The outbox is written in the same transaction as the entity.** The tempting
+alternative — save the entity, then publish an event — is a dual write, and it is wrong
+in both directions. Crash between the two and the graph has changed with nothing
+downstream knowing; publish first and fail to save, and you have triggered workflows for
+a change that never happened. Both rows, one COMMIT.
+
+**A write that changes nothing produces no change row.** Systems that sync into a graph
+re-send unchanged state constantly. Without diffing, every full sync would re-trigger
+every onboarding workflow in the company.
+
+**Predicates need `changed`, not just `match`.** "department is Engineering" stays true
+forever after the promotion, so a match-only rule fires on every subsequent save of that
+employee. `changed` is what makes it fire on the *transition*. There is a test named for
+exactly this: `test_match_alone_fires_on_every_later_write`.
+
+**`was` expresses the transition's origin.** Without it, an employee already in
+Engineering whose department field is rewritten gets onboarded a second time.
+
+**`input_template` decouples the workflow from the graph.** The node trigger maps
+`{{ entity.external_id }}` into `input.node` because that is the shape
+`rolling_cluster_upgrade` expects. One workflow can be driven by several entity types
+without knowing anything about any of them. It reuses the step-config expression engine.
+
+**Predicates are validated when a trigger is saved, not when it fires.** The dispatcher
+must never be where a predicate is discovered to be broken — by then it is on the hot
+path of every change to that entity type.
+
+**Type errors in comparison are a non-match, not a crash.** Attributes are schemaless,
+so a string turns up where a number was meant. One bad row must not block the outbox
+behind a change that can never be processed.
+
+### How to see it
+
+```bash
+docker compose exec web python manage.py seed_graph
+```
+
+```bash
+.venv\Scripts\python.exe scripts/walkthrough_05_triggers.py
+```
+
+The script resets the graph to its starting state on each run, so take four looks like
+take one.
+
+### Verified
+
+`PATCH /api/entities/employee/e_42/ {"department": "Engineering"}` — a request that
+writes two rows and calls nothing — produced, unprompted:
+
+- run `employee_onboarding`, `trigger_source: trigger:2406f493...`, input
+  `{"employee": "e_42", "manager": "m_07"}` rendered from the template
+- device assigned; github, slack and pagerduty accounts provisioned in parallel
+- status `SUCCEEDED`
+
+Both guards hold: re-writing `department` to the value it already had produced
+`changed: False` and no outbox row; changing `title` produced a change row but did not
+match the predicate. Onboarding runs stayed at 2.
+
+`PATCH /api/entities/node/node-3/ {"status": "unhealthy"}` fired
+`rolling_cluster_upgrade` with input `{"node": "node-3"}` — the same engine, a
+completely different entity type, neither workflow aware of the other.
+
+100 unit tests pass with no database.
+
+### Known gaps
+
+- `wait` has no plugin; durable timers (Block 4) remain unbuilt and are cuttable.
+- Multi-tenancy is designed (`DESIGN.md` §11) but `current_tenant()` still returns the
+  single default tenant. It is behind one function, so the change lands in one place.
+- No SSE or DAG UI; the admin and these scripts are the interface.
 

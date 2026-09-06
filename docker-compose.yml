@@ -67,6 +67,18 @@ services:
     volumes:
       - .:/app
 
+  # Reads the entity-change outbox and starts the workflows whose triggers
+  # match. Its own process so you can watch it fire during the demo.
+  dispatcher:
+    build: .
+    command: python manage.py run_dispatcher
+    environment: *env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
   # Returns tasks whose holder stopped heartbeating. Its own process so you can
   # watch it act during the crash demo.
   reaper:

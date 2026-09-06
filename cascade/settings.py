@@ -111,6 +111,9 @@ WORKER_POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "1.0"))
 # How often the reaper looks for leases that have expired.
 REAPER_POLL_SECONDS = float(os.environ.get("REAPER_POLL_SECONDS", "5.0"))
 
+# How often the dispatcher drains the entity-change outbox.
+DISPATCHER_POLL_SECONDS = float(os.environ.get("DISPATCHER_POLL_SECONDS", "1.0"))
+
 # Absolute ceiling on how many times one step may be attempted, regardless of
 # what its retry block says. This is the poison-task guard: a step that reliably
 # kills the worker executing it would otherwise be recovered by the reaper

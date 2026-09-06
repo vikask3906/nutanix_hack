@@ -57,6 +57,12 @@ def fresh_cluster():
 NODES = fresh_cluster()
 SEEN_KEYS = {}
 
+# Stand-ins for the third-party systems an onboarding workflow touches. The
+# point of having them here is that the SAME engine drives cluster operations
+# and identity provisioning - the engine knows about neither.
+ACCOUNTS = {}   # app name -> {employee id: {...}}
+DEVICES = {}    # employee id -> device id
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -123,6 +129,16 @@ class Handler(BaseHTTPRequestHandler):
                                  "drained": node["drained"]})
             return
 
+        if parts == ["apps"]:
+            with LOCK:
+                self._send(200, {"accounts": ACCOUNTS})
+            return
+
+        if parts == ["devices"]:
+            with LOCK:
+                self._send(200, {"devices": DEVICES})
+            return
+
         if parts == ["healthz"]:
             self._send(200, {"status": "ok"})
             return
@@ -133,16 +149,57 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in self.path.split("?")[0].split("/") if p]
 
         length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
 
         if parts == ["reset"]:
             with LOCK:
                 NODES.clear()
                 NODES.update(fresh_cluster())
                 SEEN_KEYS.clear()
-            self.log_message("cluster reset")
+                ACCOUNTS.clear()
+                DEVICES.clear()
+            self.log_message("everything reset")
             self._send(200, {"reset": True, "nodes": list(NODES.values())})
+            return
+
+        # -- identity provisioning ---------------------------------------
+
+        if len(parts) == 3 and parts[0] == "apps" and parts[2] == "accounts":
+            app = parts[1]
+            employee = body.get("employee")
+            if not employee:
+                self._send(400, {"error": "employee is required"})
+                return
+            with LOCK:
+                if self._duplicate(f"account:{app}", employee):
+                    self.log_message("duplicate account %s/%s absorbed", app, employee)
+                    self._send(200, {"app": app, "employee": employee, "duplicate": True})
+                    return
+                ACCOUNTS.setdefault(app, {})[employee] = {
+                    "employee": employee,
+                    "role": body.get("role", "member"),
+                }
+                self.log_message("provisioned %s account for %s", app, employee)
+            self._send(201, {"app": app, "employee": employee, "duplicate": False})
+            return
+
+        if len(parts) == 2 and parts[0] == "devices" and parts[1] == "assign":
+            employee = body.get("employee")
+            device = body.get("device", "laptop-standard")
+            if not employee:
+                self._send(400, {"error": "employee is required"})
+                return
+            with LOCK:
+                if self._duplicate("device", employee):
+                    self._send(200, {"employee": employee, "duplicate": True})
+                    return
+                DEVICES[employee] = device
+                self.log_message("assigned %s to %s", device, employee)
+            self._send(201, {"employee": employee, "device": device, "duplicate": False})
             return
 
         if len(parts) != 3 or parts[0] != "nodes":
