@@ -39,16 +39,43 @@ That's the point: it's a platform, not a pipeline.
 
 ## Stack
 
-Django · Django REST Framework · PostgreSQL · React Flow
+Django · Django REST Framework · PostgreSQL · vanilla JS dashboard
 
 Postgres is the state store, the event log, the work queue *and* the durable timer.
 No Kafka, no Celery, no separate scheduler.
+
+## Running it
+
+```bash
+docker compose up -d --scale worker=3
+docker compose exec web python manage.py seed_demo
+docker compose exec web python manage.py seed_graph
+docker compose exec web python manage.py seed_joiner
+```
+
+Then open `http://localhost:8000/` for the live view, or run the whole story
+end to end:
+
+```bash
+python scripts/demo.py
+```
+
+Individual mechanisms have their own walkthroughs in [`scripts/`](scripts/) —
+replay, the worker loop, crash recovery, rollback, graph triggers, durable
+waits and tenant isolation, each runnable on its own.
+
+The test suite needs no database:
+
+```bash
+python -m unittest discover -s . -p "test_*.py"
+```
 
 ## Documentation
 
 - [`DESIGN.md`](DESIGN.md) — architecture, data model, execution algorithms, Django
   mapping, multi-tenancy
-- [`PLAN.md`](PLAN.md) — build order, checkpoints, scope boundaries
+- [`BUILD_LOG.md`](BUILD_LOG.md) — what each part does, why it is shaped that way,
+  and what was verified
 
 ## Team
 
